@@ -22,6 +22,8 @@ const TRENDS_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-trends
 const BOUND_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-bound.png");
 const RECORDS_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-records.png");
 const WHEEL_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-wheel.png");
+const EXAM_WHEEL_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-exam-wheel.png");
+const FINDING_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-finding.png");
 const RESULT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-result.json");
 const DESKTOP_VIEWPORT = Object.freeze({ width: 1440, height: 1000 });
 const MOBILE_VIEWPORT = Object.freeze({ width: 390, height: 844 });
@@ -720,9 +722,51 @@ async function runSmoke(client, app_url, report) {
         ],
       },
       body_regions: [
-        { id: "chestAnterior", label: "Anterior chest", center: [0, 1.5, -0.9], size: [1.2, 0.8, 1.6] },
-        { id: "abdomen", label: "Abdomen", center: [0, 1.45, 0.5], size: [0.9, 0.5, 0.9] },
+        {
+          id: "chestAnterior",
+          label: "Anterior chest",
+          center: [0, 1.5, -0.9],
+          size: [1.2, 0.8, 1.6],
+          exams: [
+            { id: "inspection", label: "Inspect", hint: "Look" },
+            { id: "palpation", label: "Palpate", hint: "Feel" },
+            { id: "percussion", label: "Percuss", hint: "Tap" },
+            { id: "auscultation", label: "Auscultate", hint: "Listen" },
+          ],
+        },
+        {
+          id: "abdomen",
+          label: "Abdomen",
+          center: [0, 1.45, 0.5],
+          size: [0.9, 0.5, 0.9],
+          exams: [
+            { id: "inspection", label: "Inspect", hint: "Look" },
+            { id: "palpation", label: "Palpate", hint: "Feel" },
+            {
+              id: "special",
+              label: "Special",
+              hint: "Maneuvers",
+              tests: ["Murphy's sign", "Rebound tenderness", "Shifting dullness"],
+            },
+          ],
+        },
       ],
+      on_exam: ({ region_id, exam_id, test }) => {
+        if (region_id === "chestAnterior" && exam_id === "auscultation") {
+          return {
+            finding: "Irregularly irregular heart sounds; no murmur. Vesicular breath sounds.",
+            abnormal: true,
+            audio: [
+              { label: "Heart sounds", url: "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=" },
+              { label: "Breath sounds", url: "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=" },
+            ],
+          };
+        }
+        if (test) {
+          return { finding: test + " is negative.", abnormal: false };
+        }
+        return { finding: "No abnormality detected on " + exam_id + ".", abnormal: false };
+      },
       on_event: (event) => events.push(event),
     });
     window.__bound_room = room;
@@ -829,6 +873,171 @@ async function runSmoke(client, app_url, report) {
     "Clicking the patient's chest must report the host-supplied region id.",
   );
   report.checks.push("body-region collider hover and click reported the examined region");
+
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #exam-layer")?.classList.contains("is-open")`,
+    "the exam wheel to bloom at the click point",
+  );
+  const exam_wheel_state = await client.evaluate(`(() => {
+    const wheel = document.querySelector("#bound-host #exam-wheel");
+    return {
+      wedges: wheel.querySelectorAll("[data-exam]").length,
+      hub_kicker: wheel.querySelector("#exam-wheel-hub small")?.textContent,
+      hub_label: wheel.querySelector("#exam-wheel-hub strong")?.textContent,
+      positioned: wheel.style.left !== "" && wheel.style.top !== "",
+      open_event: window.__bound_events.some(
+        (event) => event.type === "exam_open" && event.region_id === "chestAnterior",
+      ),
+    };
+  })()`);
+  assert.deepEqual(exam_wheel_state, {
+    wedges: 4,
+    hub_kicker: "EXAMINE",
+    hub_label: "Anterior chest",
+    positioned: true,
+    open_event: true,
+  }, "Clicking the chest must bloom a four-technique exam wheel at the click point.");
+  await wait(450);
+  const exam_wheel_screenshot = await client.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+    captureBeyondViewport: false,
+  });
+  await writeFile(EXAM_WHEEL_SCREENSHOT_PATH, Buffer.from(exam_wheel_screenshot.data, "base64"));
+
+  await client.evaluate(`document.querySelector('#bound-host [data-exam="auscultation"]').click()`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #finding-card")?.classList.contains("is-visible")`,
+    "the finding card",
+  );
+  const finding_state = await client.evaluate(`(() => {
+    const host = document.querySelector("#bound-host");
+    const card = host.querySelector("#finding-card");
+    return {
+      kicker: card.querySelector(".finding-card__kicker")?.textContent.trim(),
+      severity: card.dataset.severity,
+      abnormal_flag: Boolean(card.querySelector(".finding-card__flag")),
+      finding_text: card.querySelector(".finding-card__body p")?.textContent.includes("Irregularly irregular"),
+      audio_chips: [...card.querySelectorAll(".audio-chip .audio-chip__label")].map((chip) => chip.textContent),
+      wheel_closed: !host.querySelector("#exam-layer")?.classList.contains("is-open"),
+      exam_event: window.__bound_events.some(
+        (event) => event.type === "exam" && event.exam_id === "auscultation" && event.abnormal === true,
+      ),
+      log: window.__bound_room.getExamLog(),
+    };
+  })()`);
+  assert.deepEqual(finding_state, {
+    kicker: "Anterior chest · Auscultate",
+    severity: "abnormal",
+    abnormal_flag: true,
+    finding_text: true,
+    audio_chips: ["Heart sounds", "Breath sounds"],
+    wheel_closed: true,
+    exam_event: true,
+    log: [{ region_id: "chestAnterior", exam_id: "auscultation", test: null, abnormal: true }],
+  }, "Committing auscultation must present the abnormal finding with its audio chips.");
+  await wait(400);
+  const finding_screenshot = await client.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+    captureBeyondViewport: false,
+  });
+  await writeFile(FINDING_SCREENSHOT_PATH, Buffer.from(finding_screenshot.data, "base64"));
+  report.checks.push("exam wheel bloomed on the chest, auscultation presented an abnormal finding card with audio chips");
+
+  await client.evaluate(`window.__bound_room.openExamWheel("chestAnterior")`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #exam-layer")?.classList.contains("is-open")`,
+    "the reopened exam wheel",
+  );
+  assert.equal(
+    await client.evaluate(
+      `Boolean(document.querySelector('#bound-host [data-exam="auscultation"] .exam-wheel__done--abnormal'))`,
+    ),
+    true,
+    "The reopened wheel must show an amber done-tick on the performed auscultation wedge.",
+  );
+  await client.evaluate(`document.querySelector("#bound-host #exam-wheel-hub").click()`);
+  await waitForCondition(
+    client,
+    `!document.querySelector("#bound-host #exam-layer")?.classList.contains("is-open")`,
+    "the exam wheel to close from the hub",
+  );
+  assert.equal(
+    await client.evaluate(
+      `window.__bound_events.filter((event) => event.type === "exam_close").length >= 2`,
+    ),
+    true,
+    "Both wheel visits must emit exam_close.",
+  );
+
+  await client.evaluate(`window.__bound_room.openExamWheel("abdomen")`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #exam-layer")?.classList.contains("is-open")`,
+    "the abdomen exam wheel",
+  );
+  assert.equal(
+    await client.evaluate(
+      `document.querySelector('#bound-host [data-exam="special"] .exam-wheel__badge')?.textContent`,
+    ),
+    "3",
+    "The special wedge must badge its three named tests.",
+  );
+  await client.evaluate(`document.querySelector('#bound-host [data-exam="special"]').click()`);
+  const sub_ring_state = await client.evaluate(`(() => {
+    const wheel = document.querySelector("#bound-host #exam-wheel");
+    return {
+      hub_kicker: wheel.querySelector("#exam-wheel-hub small")?.textContent,
+      wedges: wheel.querySelectorAll("[data-exam]").length,
+      has_back: Boolean(wheel.querySelector("[data-back]")),
+      first_test: wheel.querySelector("[data-test]")?.dataset.test,
+    };
+  })()`);
+  assert.deepEqual(sub_ring_state, {
+    hub_kicker: "SPECIAL TESTS",
+    wedges: 4,
+    has_back: true,
+    first_test: "Murphy's sign",
+  }, "The special wedge must morph the wheel into the named-tests sub-ring.");
+  await client.evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+  assert.equal(
+    await client.evaluate(
+      `document.querySelector("#bound-host #exam-wheel-hub small")?.textContent`,
+    ),
+    "EXAMINE",
+    "Escape must back out of the sub-ring to the technique ring.",
+  );
+  await client.evaluate(`document.querySelector('#bound-host [data-exam="special"]').click()`);
+  await client.evaluate(`document.querySelector('#bound-host [data-test="Murphy\\u0027s sign"]').click()`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #finding-card .finding-card__kicker")?.textContent.includes("Murphy")`,
+    "the special-test finding card",
+  );
+  const special_finding = await client.evaluate(`(() => {
+    const card = document.querySelector("#bound-host #finding-card");
+    return {
+      kicker: card.querySelector(".finding-card__kicker")?.textContent.trim(),
+      severity: card.dataset.severity,
+      abnormal_flag: Boolean(card.querySelector(".finding-card__flag")),
+    };
+  })()`);
+  assert.deepEqual(special_finding, {
+    kicker: "Abdomen · Murphy's sign",
+    severity: "normal",
+    abnormal_flag: false,
+  }, "A named special test must replace the technique word on the card and show no abnormal flag.");
+  await client.evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #finding-card")?.hidden === true`,
+    "the finding card to close on Escape",
+  );
+  report.checks.push("special tests sub-ring navigated (badge, back wedge, Escape layering) and a named test presented its card");
 
   await client.evaluate(`(() => {
     window.__bound_room.emphasizeRegion("chestAnterior");

@@ -158,7 +158,7 @@ ManikinPanel / BodyMap), PatientMonitor, and all current room behavior stay
 untouched and behave identically when the new surface is not visited.
 "Replace the examination room" is the FINAL, separately-approved step.
 
-### Phase A — An additional room (1 session, additive)
+### Phase A — An additional room — **IMPLEMENTED 2026-08-31** (Rohy working tree only, uncommitted by user rule)
 1. Add a sixth RoomNavigator entry (key `exam3d`, its own label/icon) and an
    App ternary branch rendering a new `Exam3DScreen` — new rows and new
    files only; the existing `examination` room is not modified. Remove
@@ -174,7 +174,7 @@ untouched and behave identically when the new surface is not visited.
 4. EventLogger stamps `room: 'exam3d'` via the existing roomChanged effect —
    no analytics code changes; TNA simply gains a new room id.
 
-### Phase B — Physical exam on the 3D body (1–2 sessions)
+### Phase B — Physical exam on the 3D body — **IMPLEMENTED 2026-08-31** (package committed; plugin worktree uncommitted)
 1. Package: invisible **region colliders** attached to the normalized rig
    bones (head/neck, chest, abdomen quadrants, pelvis, each arm/forearm/hand,
    thigh/leg/foot…), ids matching Rohy's `BODY_REGIONS`; raycast → emit
@@ -194,6 +194,47 @@ untouched and behave identically when the new surface is not visited.
    ExamNotesDrawer carries over unchanged.
 4. Patient reactions: exam findings can drive `say()` and the rig (grimace
    on tender abdomen) — optional polish.
+
+### Phase EXAM-WHEEL — Radial exam wheel + finding card — **IMPLEMENTED 2026-08-31** (package committed; plugin worktree uncommitted)
+The text exam menu is gone from the primary flow. The examination interaction
+is now fully diegetic and lives in the PACKAGE (host-agnostic):
+
+1. Package: `body_regions` entries may carry `exams: [{id, label, hint,
+   tests?}]`. Clicking such a region blooms a **radial exam wheel** at the
+   click point (clamped to the stage): clip-path wedges in the view wheel's
+   visual language, one per technique, fixed clinical order (inspect →
+   palpate → percuss → auscultate → special), fixed per-technique color +
+   glyph (never color alone), hub = "EXAMINE · <region>". A `special`
+   technique with 2+ named tests morphs the wheel into a **sub-ring** (tests
+   clockwise from 12, Back wedge pinned near 6 o'clock); exactly one test
+   flattens onto the main ring. Wedge pick → `options.on_exam({region_id,
+   exam_id, test, …})` (sync or Promise, single-flight with epoch discard) →
+   glass **finding card** bottom-center (REGION · TECHNIQUE kicker, amber
+   ABNORMAL chip + accent bar, audio chips with equalizer bars, one owned
+   Audio element, auscultation auto-plays until the learner pauses one).
+   The room itself emphasizes + glides to the region, marks it
+   examined/abnormal, and winces on a first abnormal. Done-ticks (teal /
+   amber) appear on reopened wheels. Esc unwinds one level per press
+   (sub-ring → wheel → card); a transparent scrim keeps dismiss-clicks off
+   OrbitControls. Controller: `openExamWheel(region_id, point?)`,
+   `closeExamWheel()`, `getExamLog()`. Events: `exam_open`, `exam`,
+   `exam_close` through `on_event`.
+2. Plugin worktree: `examWheelData.js` feeds the wheel Rohy's REAL model
+   (`BODY_REGIONS.examTypes` + `specialTests` relabeled as verbs — nothing
+   invented); `useExamPerformer` is the single ManikinPanel-parity perform
+   path (EventLogger + PatientRecord verbs) now shared by the wheel's
+   `on_exam` AND the ExamPanel fallback; auscultation audio resolves with
+   AuscultationPanel's exact precedence (per-point → heart/lung custom →
+   region audioUrl → canned normals, never for abdomen/abnormal).
+   ExamPanel (full anterior/posterior BodyMap) stays reachable behind a
+   "Body map" pill — the parity guarantee for regions a supine view hides.
+3. Verification: package 102 unit tests + CDP smoke journey (wheel blooms on
+   chest click, auscultation → abnormal card with audio chips, done-tick on
+   reopen, abdomen sub-ring + badge + Back + Esc layering, named-test card,
+   Esc closes card) with screenshots `tmp/rohy-browser-smoke-exam-wheel.png`
+   and `tmp/rohy-browser-smoke-finding.png`; worktree 2 888 Vitest tests
+   green (plugin 38 incl. wheel-data + audio-precedence suites), eslint
+   clean.
 
 ### Phase C — Hoist physiology to session scope (1 session; NOT additive — deferred until the user lifts the testing constraint)
 Extract PatientMonitor's simulation state + loops (params, rhythm, scenario

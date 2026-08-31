@@ -14,11 +14,16 @@ import {
 } from "./simulation.js";
 import {
   beepFrequencyForSpo2,
+  buildExamWheelMarkup,
+  buildFindingCardMarkup,
   buildRecordsMarkup,
   buildTreatmentsMarkup,
   buildTrendsMarkup,
   buildViewWheelMarkup,
+  clampWheelCenter,
   createWavePath,
+  examSubRingItems,
+  examWheelItems,
   formatElapsed,
   getStatusCopy,
   sampleTrendRows,
@@ -70,6 +75,19 @@ const CAMERA_VIEWS = Object.freeze([
   { id: "monitor", label: "Monitor", hint: "Vitals screen", color: "#ffb84a" },
   { id: "equipment", label: "Equipment", hint: "O₂ · IV side", color: "#4ecbe0" },
 ]);
+
+// Fixed accent and glyph per examination technique so the exam wheel reads
+// consistently across regions; color is never the only channel — every wedge
+// also carries its glyph and label.
+const EXAM_TECHNIQUE_STYLE = Object.freeze({
+  inspection: { color: "#5aa9ff", icon: "eye" },
+  palpation: { color: "#2ae0bd", icon: "hand" },
+  percussion: { color: "#ffb84a", icon: "tap" },
+  auscultation: { color: "#b18cff", icon: "stethoscope" },
+  special: { color: "#4ecbe0", icon: "sparkle" },
+});
+const DEFAULT_TECHNIQUE_STYLE = Object.freeze({ color: "#4ecbe0", icon: "sparkle" });
+const BACK_WEDGE_STYLE = Object.freeze({ color: "#93a7ad", icon: "back" });
 
 /**
  * Create a bedside audio engine driven by Web Audio.
@@ -163,6 +181,10 @@ export function uiIcon(name) {
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
+    hand: '<path d="M8 12V5.6a1.6 1.6 0 0 1 3.2 0V11m0-5.4V3.8a1.6 1.6 0 0 1 3.2 0V11m0-4.6a1.6 1.6 0 0 1 3.2 0v6.8a7 7 0 0 1-7 7h-.5a7 7 0 0 1-5.7-2.9l-2-2.8a1.7 1.7 0 0 1 2.6-2.1L8 14.6"/>',
+    tap: '<path d="M12 2.5v3m4.6-1.7-2 2.1M7.4 3.8l2 2.1"/><path d="M10.4 12V9.8a1.9 1.9 0 0 1 3.8 0v3.6l3.1 1.2a2 2 0 0 1 1.2 2.3l-.8 3a2 2 0 0 1-1.9 1.5h-4.2a4 4 0 0 1-3.2-1.6l-2.6-3.5"/>',
+    sparkle: '<path d="m12 3 1.7 5 5 1.7-5 1.7L12 16.4l-1.7-5-5-1.7 5-1.7L12 3Z"/><path d="m18.7 15.6.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2Z"/>',
+    back: '<path d="M14.5 5.5 8 12l6.5 6.5"/>',
   };
   const path = paths[name] ?? '<circle cx="12" cy="12" r="8"/>';
   return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
@@ -300,6 +322,13 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
           ${buildViewWheelMarkup(CAMERA_VIEWS)}
         </div>
 
+        ${features.exam ? `
+        <div class="exam-layer" id="exam-layer" hidden>
+          <div class="exam-scrim" id="exam-scrim" aria-hidden="true"></div>
+          <div class="exam-wheel" id="exam-wheel" role="group" aria-label="Examination techniques"></div>
+        </div>
+        <aside class="finding-card glass-panel" id="finding-card" hidden aria-label="Examination finding"></aside>` : ""}
+
         <div class="patient-caption" id="patient-caption"${bound ? " hidden" : ""}>
           <span class="caption-speaker">${patient.speaker}</span>
           <p>“${patient.opening_line}”</p>
@@ -427,9 +456,18 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
  *   chrome?: "full"|"room",
  *   records?: Array<object>,
  *   treatments?: {available?: Array<object>},
+ *   body_regions?: Array<{id: string, label: string, center: number[], size: number[],
+ *     exams?: Array<{id: string, label: string, hint?: string, tests?: string[]}>}>,
+ *   on_exam?: (payload: {region_id: string, region_label: string, exam_id: string,
+ *     exam_label: string, test: string|null}) =>
+ *     ({finding: string, abnormal: boolean, audio?: Array<{label: string, url: string}>}
+ *       |Promise<object>|null),
  *   on_event?: (event: object) => void,
  * }} [options] Mount configuration. chrome: "room" drops the room's own brand
  *   block for hosts that render it inside their own application chrome.
+ *   Regions carrying exams get the radial exam wheel on click; each pick asks
+ *   on_exam for the finding (null presents a neutral "not recorded" card) and
+ *   emits exam_open/exam/exam_close events.
  * @return {{
  *   dispose: () => void,
  *   update: (vitals: object, status: string|null, elapsed_seconds: number) => void,
@@ -437,6 +475,9 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
  *   say: (line: string) => void,
  *   applyAction: (action_id: string) => void,
  *   focusPreset: (name: string) => void,
+ *   openExamWheel: (region_id: string, point?: {x: number, y: number}|null) => boolean,
+ *   closeExamWheel: () => void,
+ *   getExamLog: () => Array<{region_id: string, exam_id: string, test: string|null, abnormal: boolean}>,
  *   getState: () => object,
  * }} Room controller.
  * @example
@@ -484,12 +525,45 @@ export function mountPatientRoom(container, options = {}) {
         || !Array.isArray(region.size) || region.size.length !== 3 || !region.size.every((v) => Number.isFinite(v) && v > 0)) {
         throw new Error("every body region needs id, label, center[3], and positive size[3].");
       }
+      if (region.exams === undefined) return;
+      if (!Array.isArray(region.exams) || region.exams.length === 0 || region.exams.length > 8) {
+        throw new Error(`region "${region.id}" exams must be an array of 1 to 8 techniques.`);
+      }
+      region.exams.forEach((exam) => {
+        if (typeof exam?.id !== "string" || exam.id.length === 0
+          || typeof exam.label !== "string" || exam.label.length === 0) {
+          throw new Error(`region "${region.id}" exams need id and label strings.`);
+        }
+        if (exam.tests !== undefined) {
+          // Reject config the runtime would silently ignore instead of
+          // letting the author believe it took effect.
+          if (exam.id !== "special") {
+            throw new Error(`region "${region.id}" exam "${exam.id}" cannot carry tests; only "special" can.`);
+          }
+          if (!Array.isArray(exam.tests) || exam.tests.length === 0 || exam.tests.length > 7
+            || exam.tests.some((test) => typeof test !== "string" || test.length === 0)) {
+            throw new Error(`region "${region.id}" exam "${exam.id}" tests must be 1 to 7 non-empty strings.`);
+          }
+        }
+      });
+      const exam_ids = region.exams.map((exam) => exam.id);
+      if (new Set(exam_ids).size !== exam_ids.length) {
+        throw new Error(`region "${region.id}" has duplicate exam ids.`);
+      }
     });
+    const region_ids = options.body_regions.map((region) => region.id);
+    if (new Set(region_ids).size !== region_ids.length) {
+      throw new Error("body_regions contains duplicate region ids.");
+    }
+  }
+  if (options.on_exam !== undefined && typeof options.on_exam !== "function") {
+    throw new Error("options.on_exam must be a function.");
   }
   const features = {
     records: options.records !== undefined,
     treatments: options.treatments !== undefined,
     slim_chrome: chrome === "room",
+    exam: (options.body_regions ?? []).some((region) => Array.isArray(region.exams) && region.exams.length > 0),
   };
   let available_treatments = options.treatments?.available ?? [];
   let active_treatments = [];
@@ -606,7 +680,327 @@ export function mountPatientRoom(container, options = {}) {
     openModal(elements.treatments_modal, "#treatments-close");
   };
 
-  const handleSceneSelection = (selection) => {
+  // ——— Diegetic examination flow ————————————————————————————————————————
+  // Clicking a body region blooms a radial exam wheel at the click point
+  // (techniques as wedges, special tests as a sub-ring); picking a wedge asks
+  // the host for the finding via options.on_exam and presents it in the
+  // glass finding card, marking the region and wincing on a new abnormal.
+  const exam_regions = new Map(
+    (options.body_regions ?? [])
+      .filter((region) => Array.isArray(region.exams) && region.exams.length > 0)
+      .map((region) => [region.id, region]),
+  );
+  const exam_elements = {
+    layer: root.querySelector("#exam-layer"),
+    wheel: root.querySelector("#exam-wheel"),
+    scrim: root.querySelector("#exam-scrim"),
+    card: root.querySelector("#finding-card"),
+  };
+  // One entry per performed (region, technique, test); drives wedge
+  // done-ticks, persistent region marks, and first-abnormal reactions.
+  const exam_log = new Map();
+  let exam_state = null;
+  let exam_epoch = 0;
+  let finding_audio = null;
+  let finding_hide_timeout = null;
+  let autoplay_muted = false;
+
+  const examLogKey = (region_id, exam_id, test) => `${region_id} ${exam_id} ${test ?? ""}`;
+  const techniqueStyle = (exam_id) => EXAM_TECHNIQUE_STYLE[exam_id] ?? DEFAULT_TECHNIQUE_STYLE;
+  const performedByExam = (region_id) => {
+    const performed = {};
+    exam_log.forEach((entry) => {
+      if (entry.region_id !== region_id) return;
+      if (performed[entry.exam_id] !== "abnormal") {
+        performed[entry.exam_id] = entry.abnormal ? "abnormal" : "examined";
+      }
+    });
+    return performed;
+  };
+  const performedByTest = (region_id) => {
+    const performed = {};
+    exam_log.forEach((entry) => {
+      if (entry.region_id === region_id && entry.exam_id === "special" && entry.test) {
+        performed[entry.test] = entry.abnormal ? "abnormal" : "examined";
+      }
+    });
+    return performed;
+  };
+
+  const renderExamRing = (ring) => {
+    if (!exam_state) return;
+    exam_state.ring = ring;
+    const region = exam_state.region;
+    const items = ring === "special"
+      ? examSubRingItems(exam_state.special_tests, performedByTest(region.id)).map((item) => ({
+        ...item,
+        ...(item.back ? BACK_WEDGE_STYLE : { color: EXAM_TECHNIQUE_STYLE.special.color, icon: EXAM_TECHNIQUE_STYLE.special.icon }),
+        icon: uiIcon(item.back ? BACK_WEDGE_STYLE.icon : EXAM_TECHNIQUE_STYLE.special.icon),
+      }))
+      : examWheelItems(region.exams, performedByExam(region.id)).map((item) => ({
+        ...item,
+        color: techniqueStyle(item.id).color,
+        icon: uiIcon(techniqueStyle(item.id).icon),
+      }));
+    exam_elements.wheel.innerHTML = buildExamWheelMarkup(region.label, items, { ring });
+    // A ring re-render destroys the focused wedge; keep keyboard users
+    // anchored on the hub instead of dropping focus to <body>.
+    if (!exam_elements.layer.hidden) {
+      root.querySelector("#exam-wheel-hub")?.focus({ preventScroll: true });
+    }
+  };
+
+  const stopFindingAudio = () => {
+    if (finding_audio) {
+      finding_audio.pause();
+      finding_audio = null;
+    }
+    root.querySelectorAll(".audio-chip.is-playing").forEach((chip) => chip.classList.remove("is-playing"));
+  };
+
+  const closeFindingCard = () => {
+    if (!exam_elements.card || exam_elements.card.hidden) return;
+    stopFindingAudio();
+    exam_elements.card.classList.remove("is-visible");
+    window.clearTimeout(finding_hide_timeout);
+    timers.timeouts.delete(finding_hide_timeout);
+    finding_hide_timeout = window.setTimeout(() => {
+      timers.timeouts.delete(finding_hide_timeout);
+      exam_elements.card.hidden = true;
+    }, 220);
+    timers.timeouts.add(finding_hide_timeout);
+  };
+
+  const playAudioChip = (chip, auto = false) => {
+    stopFindingAudio();
+    finding_audio = new Audio(chip.dataset.audioUrl);
+    const audio = finding_audio;
+    audio.addEventListener("ended", () => {
+      if (finding_audio === audio) stopFindingAudio();
+    });
+    audio.addEventListener("error", () => {
+      chip.classList.add("is-error");
+      chip.disabled = true;
+      if (finding_audio === audio) stopFindingAudio();
+    });
+    chip.classList.add("is-playing");
+    chip.dataset.auto = String(auto);
+    audio.play().catch(() => {
+      // Autoplay refusals leave the chip ready for a manual click.
+      if (finding_audio === audio) stopFindingAudio();
+    });
+  };
+
+  const renderFindingCard = (presentation, exam_id) => {
+    if (!exam_elements.card) return;
+    stopFindingAudio();
+    // A close armed within the last 220 ms must not hide this new card.
+    window.clearTimeout(finding_hide_timeout);
+    timers.timeouts.delete(finding_hide_timeout);
+    exam_elements.card.innerHTML = buildFindingCardMarkup(presentation);
+    exam_elements.card.dataset.severity = presentation.abnormal ? "abnormal" : "normal";
+    exam_elements.card.style.setProperty("--exam-color", techniqueStyle(exam_id).color);
+    exam_elements.card.hidden = false;
+    exam_elements.card.classList.remove("is-visible");
+    window.requestAnimationFrame(() => exam_elements.card.classList.add("is-visible"));
+    // Auscultation IS listening: its audio starts on its own (the wedge
+    // click is the user gesture) until the learner pauses one, which mutes
+    // autoplay for the rest of the session.
+    if (exam_id === "auscultation" && !autoplay_muted) {
+      const first_chip = exam_elements.card.querySelector(".audio-chip");
+      if (first_chip) playAudioChip(first_chip, true);
+    }
+  };
+
+  const closeExamWheel = () => {
+    if (!exam_state) return;
+    const { region, visit_exams } = exam_state;
+    exam_state = null;
+    exam_epoch += 1;
+    exam_elements.layer.classList.remove("is-open");
+    // A close during a pending exam discards its result via the epoch, so
+    // the settle handlers never clear this class — clear it here.
+    exam_elements.wheel.classList.remove("is-resolving");
+    const timeout_id = window.setTimeout(() => {
+      timers.timeouts.delete(timeout_id);
+      if (!exam_state) exam_elements.layer.hidden = true;
+    }, 240);
+    timers.timeouts.add(timeout_id);
+    scene_controller?.setRegionEmphasis(null);
+    if (visit_exams === 0) {
+      // Nothing was examined: hand the camera back to the active view.
+      const active_view = root.querySelector("#view-wheel")?.dataset.active;
+      if (active_view) scene_controller?.focusPreset(active_view);
+    }
+    emit({ type: "exam_close", region_id: region.id, exams_completed: visit_exams });
+  };
+
+  const openExamWheelFor = (region, point, via) => {
+    // Retargeting an already-open wheel closes the abandoned region first,
+    // so exam_open/exam_close stay balanced for the host's event stream.
+    closeExamWheel();
+    exam_epoch += 1;
+    exam_state = { region, ring: "main", visit_exams: 0, pending: false, special_tests: [] };
+    // The hub names the region now; the hover pill would linger under the
+    // wheel because the scrim swallows the pointermoves that clear it.
+    const hover_label = root.querySelector("#region-hover-label");
+    if (hover_label) hover_label.hidden = true;
+    scene_controller?.setRegionEmphasis(region.id);
+    scene_controller?.focusPoint(region.center);
+    const stage = root.querySelector(".stage");
+    const { x, y } = clampWheelCenter(
+      point?.x ?? stage.clientWidth / 2,
+      point?.y ?? stage.clientHeight / 2,
+      stage.clientWidth,
+      stage.clientHeight,
+    );
+    exam_elements.wheel.style.left = `${Math.round(x)}px`;
+    exam_elements.wheel.style.top = `${Math.round(y)}px`;
+    renderExamRing("main");
+    exam_elements.layer.hidden = false;
+    exam_elements.layer.classList.remove("is-open");
+    window.requestAnimationFrame(() => exam_elements.layer.classList.add("is-open"));
+    root.querySelector("#exam-wheel-hub")?.focus({ preventScroll: true });
+    emit({ type: "exam_open", region_id: region.id, via });
+  };
+
+  const presentExamResult = (region, exam_id, exam_label, test, result) => {
+    let presentation;
+    const valid_audio = (audio) => audio === undefined
+      || (Array.isArray(audio)
+        && audio.every((track) => typeof track?.label === "string" && typeof track?.url === "string"));
+    if (result === null || result === undefined) {
+      presentation = { finding: "No findings recorded for this examination.", abnormal: false, audio: [] };
+    } else if (typeof result.finding === "string" && result.finding.length > 0
+      && typeof result.abnormal === "boolean" && valid_audio(result.audio)) {
+      presentation = { finding: result.finding, abnormal: result.abnormal, audio: result.audio ?? [] };
+    } else {
+      // Reject before any state mutates: no log entry, no tint, no wince.
+      console.warn("on_exam returned an invalid result; expected {finding, abnormal, audio?}.", result);
+      renderFindingCard({
+        region_label: region.label,
+        exam_label,
+        error: "The examination could not be completed.",
+      }, exam_id);
+      return;
+    }
+    // Only a presented finding counts as an exam for this wheel visit —
+    // cancelled, rejected, and invalid results must not hold the camera.
+    if (exam_state) exam_state.visit_exams += 1;
+    const key = examLogKey(region.id, exam_id, test);
+    const first_abnormal = presentation.abnormal && !exam_log.get(key)?.abnormal;
+    exam_log.set(key, {
+      region_id: region.id,
+      exam_id,
+      test: test ?? null,
+      abnormal: presentation.abnormal,
+    });
+    const region_has_abnormal = [...exam_log.values()]
+      .some((entry) => entry.region_id === region.id && entry.abnormal);
+    scene_controller?.markRegion(region.id, region_has_abnormal ? "abnormal" : "examined");
+    if (first_abnormal) {
+      scene_controller?.reactPatient("wince");
+    }
+    renderFindingCard({
+      region_label: region.label,
+      exam_label,
+      finding: presentation.finding,
+      abnormal: presentation.abnormal,
+      audio: presentation.audio,
+    }, exam_id);
+    // The card's own aria-live region is injected together with its text,
+    // which many screen readers skip; the standing live region announces.
+    elements.live_region.textContent = `${region.label}, ${exam_label}: ${presentation.finding}`;
+    emit({
+      type: "exam",
+      region_id: region.id,
+      region_label: region.label,
+      exam_id,
+      exam_label,
+      test: test ?? null,
+      abnormal: presentation.abnormal,
+      finding: presentation.finding,
+    });
+  };
+
+  const commitExam = (wedge, exam_id, test) => {
+    if (!exam_state || exam_state.pending) return;
+    const region = exam_state.region;
+    const exam_def = region.exams.find((exam) => exam.id === exam_id);
+    // On the card, a named special test replaces the technique word.
+    const exam_label = test ?? exam_def?.label ?? exam_id;
+    exam_state.pending = true;
+    wedge.classList.add("is-committing");
+    exam_elements.wheel.classList.add("is-resolving");
+    const epoch = exam_epoch;
+    Promise.resolve()
+      .then(() => options.on_exam?.({
+        region_id: region.id,
+        region_label: region.label,
+        exam_id,
+        exam_label: exam_def?.label ?? exam_id,
+        test: test ?? null,
+      }))
+      .then((result) => {
+        if (disposed || epoch !== exam_epoch) return;
+        presentExamResult(region, exam_id, exam_label, test, result);
+        closeExamWheel();
+        exam_elements.wheel.classList.remove("is-resolving");
+      })
+      .catch((error) => {
+        if (disposed || epoch !== exam_epoch) return;
+        console.warn("on_exam failed.", error);
+        renderFindingCard({ region_label: region.label, exam_label, error: "The examination could not be completed." }, exam_id);
+        closeExamWheel();
+        exam_elements.wheel.classList.remove("is-resolving");
+      });
+  };
+
+  exam_elements.wheel?.addEventListener("click", (event) => {
+    if (event.target.closest("#exam-wheel-hub")) {
+      if (exam_state?.ring === "special") renderExamRing("main");
+      else closeExamWheel();
+      return;
+    }
+    const wedge = event.target.closest("[data-exam]");
+    if (!wedge || !exam_state || exam_state.pending) return;
+    if (wedge.dataset.back) {
+      renderExamRing("main");
+      return;
+    }
+    const exam_id = wedge.dataset.exam;
+    const exam_def = exam_state.region.exams.find((exam) => exam.id === exam_id);
+    if (exam_id === "special" && !wedge.dataset.test && (exam_def?.tests?.length ?? 0) > 1) {
+      exam_state.special_tests = exam_def.tests;
+      renderExamRing("special");
+      return;
+    }
+    commitExam(wedge, exam_id, wedge.dataset.test ?? null);
+  });
+  exam_elements.scrim?.addEventListener("pointerdown", () => closeExamWheel());
+  exam_elements.card?.addEventListener("click", (event) => {
+    if (event.target.closest("#finding-close")) {
+      closeFindingCard();
+      return;
+    }
+    const chip = event.target.closest(".audio-chip");
+    if (!chip || chip.disabled) return;
+    if (chip.classList.contains("is-playing")) {
+      if (chip.dataset.auto === "true") autoplay_muted = true;
+      stopFindingAudio();
+    } else {
+      playAudioChip(chip);
+    }
+  });
+
+  const handleSceneSelection = (selection, point) => {
+    const exam_region = selection.kind === "region" ? exam_regions.get(selection.id) : undefined;
+    if (exam_region) {
+      // The wheel's hub names the region; the toast would be noise.
+      emit({ type: "selection", ...selection });
+      openExamWheelFor(exam_region, point ?? null, "click");
+      return;
+    }
     showToast(selection.label);
     emit({ type: "selection", ...selection });
     if (bound) {
@@ -942,6 +1336,39 @@ export function mountPatientRoom(container, options = {}) {
   });
 
   const handleKeydown = (event) => {
+    // Esc closes the topmost layer, one level per press: modal, then the
+    // exam sub-ring, then the wheel, then the finding card — and runs
+    // before the button guard so it works with a wedge focused.
+    if (event.key === "Escape") {
+      const open_modals = [elements.trends_modal, elements.records_modal, elements.treatments_modal]
+        .filter((modal) => modal && !modal.hidden);
+      if (open_modals.length > 0) {
+        open_modals.forEach((modal) => closeModal(modal));
+        return;
+      }
+      if (exam_state) {
+        if (exam_state.ring === "special") renderExamRing("main");
+        else closeExamWheel();
+        return;
+      }
+      if (exam_elements.card && !exam_elements.card.hidden) {
+        closeFindingCard();
+      }
+      return;
+    }
+    // Arrow keys walk the wedges only while focus is on the wheel, so an
+    // embedding host's own inputs never lose their arrow keys.
+    if (exam_state && ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)
+      && exam_elements.wheel.contains(document.activeElement)) {
+      const wedges = [...exam_elements.wheel.querySelectorAll("[data-exam]")];
+      if (wedges.length > 0) {
+        event.preventDefault();
+        const step = ["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1;
+        const current = wedges.indexOf(document.activeElement);
+        wedges[(current + step + wedges.length) % wedges.length].focus();
+      }
+      return;
+    }
     if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLAnchorElement) return;
     const camera_names = ["overview", "patient", "airway", "monitor", "equipment"];
     if (/^[1-5]$/.test(event.key)) {
@@ -950,11 +1377,6 @@ export function mountPatientRoom(container, options = {}) {
     if (event.code === "Space" && elements.pause_button && (!elements.brief_modal || elements.brief_modal.hidden)) {
       event.preventDefault();
       elements.pause_button.click();
-    }
-    if (event.key === "Escape") {
-      [elements.trends_modal, elements.records_modal, elements.treatments_modal]
-        .filter((modal) => modal && !modal.hidden)
-        .forEach((modal) => closeModal(modal));
     }
   };
   document.addEventListener("keydown", handleKeydown);
@@ -996,6 +1418,9 @@ export function mountPatientRoom(container, options = {}) {
     dispose() {
       if (disposed) return;
       disposed = true;
+      exam_epoch += 1;
+      exam_state = null;
+      stopFindingAudio();
       timers.intervals.forEach((interval_id) => window.clearInterval(interval_id));
       timers.timeouts.forEach((timeout_id) => window.clearTimeout(timeout_id));
       window.clearTimeout(toast_timeout);
@@ -1068,6 +1493,19 @@ export function mountPatientRoom(container, options = {}) {
     },
     react(kind) {
       scene_controller?.reactPatient(kind);
+    },
+    // Open the exam wheel programmatically (e.g. from a host body map); with
+    // no point it centers on the stage. Returns false for a region without
+    // exams. closeExamWheel folds it; getExamLog lists performed exams.
+    openExamWheel(region_id, point = null) {
+      const region = exam_regions.get(region_id);
+      if (!region || disposed) return false;
+      openExamWheelFor(region, point, "api");
+      return true;
+    },
+    closeExamWheel,
+    getExamLog() {
+      return [...exam_log.values()].map((entry) => ({ ...entry }));
     },
     getState() {
       return { ...state, actions: [...state.actions], log: [...state.log] };

@@ -1103,7 +1103,13 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
       return findInteractiveData(intersection.object);
     });
     if (hit) {
-      on_select(findInteractiveData(hit.object));
+      // The canvas fills the stage, so canvas-relative coordinates anchor
+      // stage-positioned UI (the exam wheel) at the click point.
+      const bounds = renderer.domElement.getBoundingClientRect();
+      on_select(findInteractiveData(hit.object), {
+        x: event.clientX - bounds.left,
+        y: event.clientY - bounds.top,
+      });
     }
   };
   renderer.domElement.addEventListener("click", handle_pointer);
