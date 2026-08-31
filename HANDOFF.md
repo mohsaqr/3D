@@ -10,7 +10,7 @@
 - Added a shaped blanket and patient close-up camera while retaining the procedural avatar only as an automatic load fallback.
 - Recast the example patient as Daniel Moreau, 54, across the interface and scenario feedback.
 - Added structural GLB/license tests, extensive synthetic rig tests, and a browser assertion that rejects fallback rendering.
-- Generated current visual evidence in `tmp/rohy-browser-smoke-desktop.png` and `tmp/rohy-browser-smoke-patient.png`.
+- Preserved current visual evidence in `docs/images/rohy-patient-room.png` and `docs/images/rohy-patient-close-up.png`; browser runs also refresh ignored copies under `tmp/`.
 
 ## Current State
 - The private source repository is `https://github.com/mohsaqr/3D`; local `main` tracks `origin/main`.
@@ -49,4 +49,5 @@
 - Dependencies are pinned to Three.js 0.185.1 and Vite 8.2.2.
 - The browser smoke test searches for Chrome automatically and used `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` on this machine.
 - `tmp/` browser evidence is intentionally retained for review but ignored by `.gitignore`.
+- Stable README evidence is committed under `docs/images/` so it renders correctly on GitHub.
 - `public/avatars/avatarsdk.glb` is 12,284,040 bytes and is covered by `public/licenses/talkinghead.LICENSE.txt` and `THIRD_PARTY_NOTICES.md`.

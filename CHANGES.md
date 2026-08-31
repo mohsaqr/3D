@@ -1,6 +1,7 @@
 ### 2026-08-31 — Establish the private 3D project repository
 - `.git/`: Initialized a dedicated `main` repository in this directory so it no longer inherits the unrelated home-level Git repository.
 - `HANDOFF.md`, `LEARNINGS.md`: Recorded the private remote, repository boundary, verification state, and continuation context.
+- `docs/images/`, `README.md`: Preserved stable patient-room screenshots so the private repository README renders its visual evidence.
 - GitHub: Created the private `mohsaqr/3D` repository and configured it as `origin`.
 
 ### 2026-08-31 — Replace the procedural patient with a rigged full-body Rohy avatar

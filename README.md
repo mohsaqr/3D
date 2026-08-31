@@ -2,9 +2,9 @@
 
 An original, browser-based clinical simulation prototype for Rohy. The experience places a textured, full-body rigged patient in a procedural 3D hospital room and links clinical actions to live physiology, patient reactions, objectives, scoring, and a replayable timeline.
 
-![Rohy 3D patient room](./tmp/rohy-browser-smoke-desktop.png)
+![Rohy 3D patient room](./docs/images/rohy-patient-room.png)
 
-![Rigged patient close-up](./tmp/rohy-browser-smoke-patient.png)
+![Rigged patient close-up](./docs/images/rohy-patient-close-up.png)
 
 ## Run locally
 
