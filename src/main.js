@@ -327,7 +327,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
           <div class="exam-scrim" id="exam-scrim" aria-hidden="true"></div>
           <div class="exam-wheel" id="exam-wheel" role="group" aria-label="Examination techniques"></div>
         </div>
-        <aside class="finding-card glass-panel" id="finding-card" hidden aria-label="Examination finding"></aside>` : ""}
+        ${features.finding_card ? `<aside class="finding-card glass-panel" id="finding-card" hidden aria-label="Examination finding"></aside>` : ""}` : ""}
 
         <div class="patient-caption" id="patient-caption"${bound ? " hidden" : ""}>
           <span class="caption-speaker">${patient.speaker}</span>
@@ -454,6 +454,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
  *   mode?: "standalone"|"bound",
  *   waveform?: "internal"|"host",
  *   chrome?: "full"|"room",
+ *   findings?: "internal"|"host",
  *   records?: Array<object>,
  *   treatments?: {available?: Array<object>},
  *   body_regions?: Array<{id: string, label: string, center: number[], size: number[],
@@ -467,7 +468,9 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
  *   block for hosts that render it inside their own application chrome.
  *   Regions carrying exams get the radial exam wheel on click; each pick asks
  *   on_exam for the finding (null presents a neutral "not recorded" card) and
- *   emits exam_open/exam/exam_close events.
+ *   emits exam_open/exam/exam_close events. findings: "host" suppresses the
+ *   room's own finding card — the room still marks regions and winces, and the
+ *   exam event carries the finding for the host to present in its own surface.
  * @return {{
  *   dispose: () => void,
  *   update: (vitals: object, status: string|null, elapsed_seconds: number) => void,
@@ -559,11 +562,20 @@ export function mountPatientRoom(container, options = {}) {
   if (options.on_exam !== undefined && typeof options.on_exam !== "function") {
     throw new Error("options.on_exam must be a function.");
   }
+  const findings = options.findings ?? "internal";
+  if (!["internal", "host"].includes(findings)) {
+    throw new Error(`Unknown findings mode: ${findings}`);
+  }
   const features = {
     records: options.records !== undefined,
     treatments: options.treatments !== undefined,
     slim_chrome: chrome === "room",
     exam: (options.body_regions ?? []).some((region) => Array.isArray(region.exams) && region.exams.length > 0),
+    // findings: "host" keeps the wheel, the region marks, and the wince,
+    // but the host presents the finding in its own richer surface (e.g.
+    // Rohy's FindingDisplay with its interactive auscultation points), so
+    // the room renders no finding card of its own.
+    finding_card: findings === "internal",
   };
   let available_treatments = options.treatments?.available ?? [];
   let active_treatments = [];

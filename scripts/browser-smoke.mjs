@@ -682,9 +682,16 @@ async function runSmoke(client, app_url, report) {
   });
   const bound_state = await client.evaluate(`(async () => {
     const { mountPatientRoom } = await import("/src/main.js");
+    // Mimic Rohy's embedding geometry exactly: the mount host stops 72px
+    // above the viewport bottom, where the host's own fixed room navigator
+    // sits. A full-viewport host would hide every bottom-edge collision.
+    const navigator_band = document.createElement("div");
+    navigator_band.id = "bound-navigator";
+    navigator_band.style.cssText = "position:fixed;inset:auto 0 0 0;height:72px;z-index:1000;background:#0b1020;";
+    document.body.appendChild(navigator_band);
     const host = document.createElement("div");
     host.id = "bound-host";
-    host.style.cssText = "position:fixed;inset:0;z-index:999;";
+    host.style.cssText = "position:fixed;inset:0 0 72px 0;z-index:999;";
     document.body.appendChild(host);
     const events = [];
     const room = mountPatientRoom(host, {
@@ -1080,8 +1087,58 @@ async function runSmoke(client, app_url, report) {
     at_end_after: true,
     body_focusable: true,
   }, "A long finding must show the scroll cue and lift it at the end of the text.");
-  await client.evaluate(`document.querySelector("#bound-host #finding-close").click()`);
   report.checks.push("long findings scroll inside the card with a fade cue that lifts at the end");
+
+  // The finding must stay fully inside the mount host at every window
+  // height — anything below the host's bottom edge is hidden behind the
+  // embedding app's navigator and cannot be read or scrolled to.
+  const fit_measurements = [];
+  for (const height of [1000, 820, 700, 620]) {
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: DESKTOP_VIEWPORT.width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await wait(220);
+    fit_measurements.push(await client.evaluate(`(() => {
+      const host = document.querySelector("#bound-host").getBoundingClientRect();
+      const card = document.querySelector("#bound-host #finding-card").getBoundingClientRect();
+      const body = document.querySelector("#bound-host .finding-card__body");
+      return {
+        viewport_height: window.innerHeight,
+        overflow_below_host: Math.round(card.bottom - host.bottom),
+        overflow_above_host: Math.round(host.top - card.top),
+        body_visible_height: Math.round(body.getBoundingClientRect().height),
+        stage_overflow: Math.round(
+          document.querySelector("#bound-host .stage").getBoundingClientRect().bottom - host.bottom,
+        ),
+      };
+    })()`));
+  }
+  report.finding_card_fit = fit_measurements;
+  fit_measurements.forEach((measurement) => {
+    assert.ok(
+      measurement.overflow_below_host <= 0,
+      `At ${measurement.viewport_height}px the finding card hangs ${measurement.overflow_below_host}px below the mount host (hidden behind the host's navigator): ${JSON.stringify(measurement)}`,
+    );
+    assert.ok(
+      measurement.overflow_above_host <= 0,
+      `At ${measurement.viewport_height}px the finding card is clipped at the top of the mount host: ${JSON.stringify(measurement)}`,
+    );
+    assert.ok(
+      measurement.body_visible_height >= 40,
+      `At ${measurement.viewport_height}px the finding text area collapsed to ${measurement.body_visible_height}px.`,
+    );
+  });
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    ...DESKTOP_VIEWPORT,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await wait(200);
+  report.checks.push("finding card stays inside the mount host at 1000/820/700/620px window heights");
+  await client.evaluate(`document.querySelector("#bound-host #finding-close").click()`);
 
   await client.evaluate(`(() => {
     window.__bound_room.emphasizeRegion("chestAnterior");
@@ -1155,6 +1212,49 @@ async function runSmoke(client, app_url, report) {
     captureBeyondViewport: false,
   });
   await writeFile(BOUND_SCREENSHOT_PATH, Buffer.from(bound_screenshot.data, "base64"));
+
+  // findings: "host" — the room runs the wheel and still marks/reacts, but
+  // renders no finding card, because the host presents findings in its own
+  // richer surface (in Rohy: FindingDisplay with its auscultation points).
+  const host_findings_state = await client.evaluate(`(async () => {
+    const { mountPatientRoom } = await import("/src/main.js");
+    const host = document.createElement("div");
+    host.id = "host-findings";
+    host.style.cssText = "position:fixed;inset:0 0 72px 0;z-index:998;visibility:hidden;";
+    document.body.appendChild(host);
+    const events = [];
+    const room = mountPatientRoom(host, {
+      mode: "bound",
+      chrome: "room",
+      findings: "host",
+      body_regions: [{
+        id: "abdomen",
+        label: "Abdomen",
+        center: [0, 1.45, 0.5],
+        size: [0.9, 0.5, 0.9],
+        exams: [{ id: "palpation", label: "Palpate", hint: "Feel" }],
+      }],
+      on_exam: () => ({ finding: "Soft and non-tender.", abnormal: false }),
+      on_event: (event) => events.push(event),
+    });
+    room.openExamWheel("abdomen");
+    host.querySelector('[data-exam="palpation"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const state = {
+      card_absent: host.querySelector("#finding-card") === null,
+      exam_emitted: events.some((event) => event.type === "exam" && event.exam_id === "palpation"),
+      logged: room.getExamLog().length,
+    };
+    room.dispose();
+    host.remove();
+    return state;
+  })()`);
+  assert.deepEqual(host_findings_state, {
+    card_absent: true,
+    exam_emitted: true,
+    logged: 1,
+  }, 'findings: "host" must suppress the room card while still performing and reporting the exam.');
+  report.checks.push('findings: "host" suppresses the room finding card while exams still perform, log, and emit');
 
   const disposed_clean = await client.evaluate(`(() => {
     const host = document.querySelector("#bound-host");
