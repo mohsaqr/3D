@@ -241,6 +241,81 @@ export function buildTreatmentsMarkup(active, available) {
 }
 
 /**
+ * Build a radial view-wheel: donut wedges around a central hub, one per
+ * camera view, each with a colored rim arc, a label, and a hint. Wedges are
+ * real <button data-camera> elements (wedge-shaped via clip-path), so
+ * existing delegation and keyboard shortcuts keep working.
+ * @param {Array<{id: string, label: string, hint: string, color: string}>} views
+ *   3–8 views; the first wedge is centered at the top.
+ * @return {string} HTML markup for the wheel's rims, wedges, and hub.
+ * @example
+ * buildViewWheelMarkup([{id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff"}, ...]);
+ */
+export function buildViewWheelMarkup(views) {
+  if (!Array.isArray(views) || views.length < 3 || views.length > 8) {
+    throw new Error("views must be an array of 3 to 8 entries.");
+  }
+  views.forEach((view) => {
+    if ([view?.id, view?.label, view?.hint, view?.color].some((value) => typeof value !== "string" || value.length === 0)) {
+      throw new Error("every view needs id, label, hint, and color strings.");
+    }
+  });
+
+  const size = 300;
+  const center = size / 2;
+  const outer_radius = 147;
+  const inner_radius = 60;
+  const rim_radius = 141;
+  const sector = 360 / views.length;
+  const gap_degrees = 2.2;
+  const to_radians = (degrees) => (degrees * Math.PI) / 180;
+  const point = (radius, degrees) => [
+    center + radius * Math.cos(to_radians(degrees)),
+    center + radius * Math.sin(to_radians(degrees)),
+  ];
+  const percent = (value) => `${((value / size) * 100).toFixed(2)}%`;
+
+  const rim_paths = [];
+  const wedges = views.map((view, index) => {
+    const start = -90 - sector / 2 + index * sector + gap_degrees;
+    const end = start + sector - gap_degrees * 2;
+    const arc_samples = 8;
+    const outer_points = Array.from({ length: arc_samples + 1 }, (_, i) => {
+      return point(outer_radius, start + ((end - start) * i) / arc_samples);
+    });
+    const inner_points = Array.from({ length: arc_samples + 1 }, (_, i) => {
+      return point(inner_radius, end - ((end - start) * i) / arc_samples);
+    });
+    const polygon = [...outer_points, ...inner_points]
+      .map(([x, y]) => `${percent(x)} ${percent(y)}`)
+      .join(", ");
+
+    const [rim_start_x, rim_start_y] = point(rim_radius, start);
+    const [rim_end_x, rim_end_y] = point(rim_radius, end);
+    rim_paths.push(`<path data-for="${view.id}" d="M ${rim_start_x.toFixed(1)} ${rim_start_y.toFixed(1)} A ${rim_radius} ${rim_radius} 0 0 1 ${rim_end_x.toFixed(1)} ${rim_end_y.toFixed(1)}" stroke="${view.color}"/>`);
+
+    const label_radius = (outer_radius + inner_radius) / 2 + 6;
+    const [label_x, label_y] = point(label_radius, (start + end) / 2);
+    return `
+      <button type="button" class="view-wheel__wedge${index === 0 ? " is-active" : ""}" data-camera="${view.id}"
+        style="--wedge-color: ${view.color}; clip-path: polygon(${polygon});">
+        <span class="view-wheel__copy" style="left: ${percent(label_x)}; top: ${percent(label_y)};">
+          <strong>${view.label}</strong>
+          <small>${view.hint}</small>
+        </span>
+      </button>`;
+  });
+
+  return `
+    <svg class="view-wheel__rims" viewBox="0 0 ${size} ${size}" aria-hidden="true">${rim_paths.join("")}</svg>
+    ${wedges.join("")}
+    <button type="button" class="view-wheel__hub" id="view-wheel-hub" aria-expanded="false" aria-label="Choose camera view">
+      <small>VIEW</small>
+      <strong id="view-wheel-label">${views[0].label}</strong>
+    </button>`;
+}
+
+/**
  * Evenly downsample recorded vitals rows for the trends view.
  * @param {Array<object>} rows Recorded rows, oldest first.
  * @param {number} [maximum] Maximum rows to keep (>= 2).

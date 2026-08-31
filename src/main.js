@@ -17,6 +17,7 @@ import {
   buildRecordsMarkup,
   buildTreatmentsMarkup,
   buildTrendsMarkup,
+  buildViewWheelMarkup,
   createWavePath,
   formatElapsed,
   getStatusCopy,
@@ -60,6 +61,15 @@ export const NEUTRAL_PATIENT = Object.freeze({
 });
 
 const PATIENT_STATUSES = Object.freeze(["critical", "unstable", "stabilizing", "stable"]);
+
+// The radial view wheel's wedges; keys 1-5 map to this order.
+const CAMERA_VIEWS = Object.freeze([
+  { id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff" },
+  { id: "patient", label: "Patient", hint: "Bedside close-up", color: "#2ae0bd" },
+  { id: "airway", label: "Airway", hint: "Head & airway", color: "#b18cff" },
+  { id: "monitor", label: "Monitor", hint: "Vitals screen", color: "#ffb84a" },
+  { id: "equipment", label: "Equipment", hint: "O₂ · IV side", color: "#4ecbe0" },
+]);
 
 /**
  * Create a bedside audio engine driven by Web Audio.
@@ -286,13 +296,8 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <div class="selection-toast" id="selection-toast" hidden></div>
         <div class="region-hover-label" id="region-hover-label" hidden></div>
 
-        <div class="camera-controls" aria-label="Camera views">
-          <span>${uiIcon("rotate")} VIEW</span>
-          <button class="camera-button is-active" data-camera="overview" type="button"><kbd>1</kbd> Overview</button>
-          <button class="camera-button" data-camera="patient" type="button"><kbd>2</kbd> Patient</button>
-          <button class="camera-button" data-camera="airway" type="button"><kbd>3</kbd> Airway</button>
-          <button class="camera-button" data-camera="monitor" type="button"><kbd>4</kbd> Monitor</button>
-          <button class="camera-button" data-camera="equipment" type="button"><kbd>5</kbd> Equipment</button>
+        <div class="view-wheel" id="view-wheel" data-active="overview" aria-label="Camera views">
+          ${buildViewWheelMarkup(CAMERA_VIEWS)}
         </div>
 
         <div class="patient-caption" id="patient-caption"${bound ? " hidden" : ""}>
@@ -798,10 +803,22 @@ export function mountPatientRoom(container, options = {}) {
 
   on("[data-category]", (event) => setCategory(event.currentTarget.dataset.category));
   on("[data-action]", (event) => performAction(event.currentTarget.dataset.action));
+  const view_wheel = root.querySelector("#view-wheel");
   on("[data-camera]", (event) => {
     root.querySelectorAll("[data-camera]").forEach((camera_button) => camera_button.classList.remove("is-active"));
     event.currentTarget.classList.add("is-active");
     scene_controller?.focusPreset(event.currentTarget.dataset.camera);
+    const view = CAMERA_VIEWS.find((candidate) => candidate.id === event.currentTarget.dataset.camera);
+    if (view) {
+      view_wheel.dataset.active = view.id;
+      root.querySelector("#view-wheel-label").textContent = view.label;
+    }
+    view_wheel.classList.remove("is-open");
+    root.querySelector("#view-wheel-hub").setAttribute("aria-expanded", "false");
+  });
+  root.querySelector("#view-wheel-hub").addEventListener("click", (event) => {
+    const open = view_wheel.classList.toggle("is-open");
+    event.currentTarget.setAttribute("aria-expanded", String(open));
   });
 
   root.querySelector("#begin-button")?.addEventListener("click", () => {

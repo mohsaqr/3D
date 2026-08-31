@@ -21,6 +21,7 @@ const PATIENT_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-patie
 const TRENDS_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-trends.png");
 const BOUND_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-bound.png");
 const RECORDS_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-records.png");
+const WHEEL_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-wheel.png");
 const RESULT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-result.json");
 const DESKTOP_VIEWPORT = Object.freeze({ width: 1440, height: 1000 });
 const MOBILE_VIEWPORT = Object.freeze({ width: 390, height: 844 });
@@ -570,6 +571,34 @@ async function runSmoke(client, app_url, report) {
   await writeFile(PATIENT_SCREENSHOT_PATH, Buffer.from(patient_screenshot.data, "base64"));
   report.checks.push("rigged full-body patient loaded and patient camera evidence was captured");
 
+  await client.evaluate(`document.querySelector("#view-wheel-hub").click()`);
+  assert.deepEqual(
+    await client.evaluate(`({
+      open: document.querySelector("#view-wheel")?.classList.contains("is-open"),
+      expanded: document.querySelector("#view-wheel-hub")?.getAttribute("aria-expanded"),
+    })`),
+    { open: true, expanded: "true" },
+    "The view-wheel hub must expand the radial menu.",
+  );
+  await wait(400);
+  const wheel_screenshot = await client.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+    captureBeyondViewport: false,
+  });
+  await writeFile(WHEEL_SCREENSHOT_PATH, Buffer.from(wheel_screenshot.data, "base64"));
+  await click(client, '[data-camera="airway"]');
+  assert.deepEqual(
+    await client.evaluate(`({
+      open: document.querySelector("#view-wheel")?.classList.contains("is-open"),
+      active: document.querySelector("#view-wheel")?.dataset.active,
+      label: document.querySelector("#view-wheel-label")?.textContent,
+    })`),
+    { open: false, active: "airway", label: "Airway" },
+    "Choosing a wedge must select the view, update the hub, and close the wheel.",
+  );
+  report.checks.push("radial view wheel opened, selected a view, and collapsed");
+
   for (const camera of ["monitor", "equipment", "overview"]) {
     await click(client, `[data-camera="${camera}"]`);
     assert.equal(
@@ -695,7 +724,7 @@ async function runSmoke(client, app_url, report) {
       has_dashboard_button: Boolean(host.querySelector("#dashboard-button")),
       has_scene_labels: Boolean(host.querySelector(".scene-label")),
       has_monitor_panel: Boolean(host.querySelector(".monitor-panel")),
-      has_camera_controls: Boolean(host.querySelector(".camera-controls")),
+      has_camera_controls: Boolean(host.querySelector(".view-wheel")),
       has_brand: Boolean(host.querySelector(".brand")),
       case_heading_present: Boolean(host.querySelector(".case-heading h1")),
       caption_hidden: host.querySelector("#patient-caption")?.hidden,

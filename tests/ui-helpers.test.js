@@ -6,6 +6,7 @@ import {
   buildRecordsMarkup,
   buildTreatmentsMarkup,
   buildTrendsMarkup,
+  buildViewWheelMarkup,
   createTrendPath,
   createWavePath,
   formatElapsed,
@@ -192,4 +193,39 @@ test("buildTreatmentsMarkup lists active orders and indexed order buttons", () =
   assert.match(empty, /No active treatment\./);
   assert.match(empty, /No treatments available\./);
   assert.throws(() => buildTreatmentsMarkup(null, []), /must be arrays/);
+});
+
+test("buildViewWheelMarkup renders wedge buttons, rims, hub, and validates input", () => {
+  const views = [
+    { id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff" },
+    { id: "patient", label: "Patient", hint: "Bedside close-up", color: "#2ae0bd" },
+    { id: "airway", label: "Airway", hint: "Head & airway", color: "#b18cff" },
+    { id: "monitor", label: "Monitor", hint: "Vitals screen", color: "#ffb84a" },
+    { id: "equipment", label: "Equipment", hint: "O\u2082 \u00b7 IV side", color: "#4ecbe0" },
+  ];
+  const markup = buildViewWheelMarkup(views);
+
+  views.forEach((view) => {
+    assert.match(markup, new RegExp(`data-camera="${view.id}"`));
+    assert.match(markup, new RegExp(`data-for="${view.id}"`));
+    assert.match(markup, new RegExp(`--wedge-color: ${view.color}`));
+    assert.match(markup, new RegExp(`<strong>${view.label.replace("\u00b7", ".")}</strong>`));
+  });
+  assert.equal([...markup.matchAll(/view-wheel__wedge/g)].length, 5);
+  assert.equal([...markup.matchAll(/clip-path: polygon\(/g)].length, 5);
+  assert.match(markup, /view-wheel__wedge is-active" data-camera="overview"/);
+  assert.match(markup, /id="view-wheel-hub"/);
+  assert.match(markup, /id="view-wheel-label">Overview</);
+  // Every polygon vertex must stay inside the wheel box.
+  [...markup.matchAll(/polygon\(([^)]+)\)/g)].forEach((match) => {
+    match[1].split(",").forEach((pair) => {
+      pair.trim().split(" ").forEach((coordinate) => {
+        const value = Number(coordinate.replace("%", ""));
+        assert.ok(value >= -0.5 && value <= 100.5, `vertex ${coordinate} escapes the wheel`);
+      });
+    });
+  });
+
+  assert.throws(() => buildViewWheelMarkup(views.slice(0, 2)), /3 to 8 entries/);
+  assert.throws(() => buildViewWheelMarkup([...views.slice(0, 3), { id: "x", label: "X", hint: "", color: "#fff" }]), /id, label, hint, and color/);
 });

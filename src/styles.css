@@ -324,7 +324,7 @@
 .monitor-panel,
 .activity-panel,
 .action-dock,
-.camera-controls,
+.view-wheel,
 .patient-caption,
 .scene-label,
 .selection-toast {
@@ -720,60 +720,160 @@
   left: 64%;
 }
 
-.camera-controls {
-  bottom: 193px;
+.view-wheel {
+  z-index: 6;
+  bottom: 208px;
   left: 50%;
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  padding: 5px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: rgba(5, 20, 24, 0.74);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
-  backdrop-filter: blur(16px);
+  width: 300px;
+  height: 300px;
+  pointer-events: none;
   transform: translateX(-50%);
 }
 
-.camera-controls > span {
-  display: flex;
-  gap: 5px;
-  align-items: center;
-  margin: 0 7px;
+/* Bound rooms have no action dock — the wheel sits low and central. */
+.simulator--bound .view-wheel {
+  bottom: 30px;
+}
+
+.view-wheel.is-open {
+  z-index: 9;
+}
+
+.view-wheel__rims {
+  position: absolute;
+  inset: 0;
+  fill: none;
+  stroke-width: 6;
+  stroke-linecap: round;
+  opacity: 0;
+  transform: scale(0.55);
+  transform-origin: center;
+  transition: transform 260ms cubic-bezier(0.2, 0.9, 0.25, 1.15), opacity 200ms ease;
+}
+
+.view-wheel__rims path {
+  opacity: 0.5;
+}
+
+.view-wheel__wedge {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--wedge-color) 14%, transparent), transparent 55%),
+    rgba(8, 24, 28, 0.88);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.55);
+  transform-origin: center;
+  transition: transform 260ms cubic-bezier(0.2, 0.9, 0.25, 1.15), opacity 200ms ease, background 160ms ease;
+}
+
+.view-wheel__wedge:hover {
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--wedge-color) 30%, transparent), transparent 60%),
+    rgba(10, 30, 34, 0.92);
+}
+
+.view-wheel__wedge.is-active {
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--wedge-color) 40%, transparent), transparent 68%),
+    rgba(12, 34, 38, 0.94);
+}
+
+.view-wheel__copy {
+  position: absolute;
+  display: grid;
+  gap: 1px;
+  justify-items: center;
+  pointer-events: none;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+.view-wheel__copy strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.view-wheel__copy small {
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0.05em;
+}
+
+.view-wheel__wedge.is-active .view-wheel__copy strong {
+  color: color-mix(in srgb, var(--wedge-color) 70%, #ffffff);
+}
+
+.view-wheel__hub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 104px;
+  height: 104px;
+  border: 1px solid rgba(42, 224, 189, 0.35);
+  border-radius: 50%;
+  gap: 2px;
+  align-content: center;
+  justify-items: center;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 34% 28%, rgba(120, 240, 214, 0.25), transparent 58%),
+    linear-gradient(155deg, #0d3b38, #071c1f);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45), 0 0 0 6px rgba(5, 18, 21, 0.65);
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+  transition: box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.view-wheel__hub:hover {
+  border-color: rgba(42, 224, 189, 0.7);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.5), 0 0 24px rgba(42, 224, 189, 0.25), 0 0 0 6px rgba(5, 18, 21, 0.65);
+}
+
+.view-wheel__hub small {
   color: var(--faint);
   font-size: 7px;
   font-weight: 700;
-  letter-spacing: 1px;
+  letter-spacing: 1.6px;
 }
 
-.camera-controls > span svg {
-  width: 12px;
-  height: 12px;
+.view-wheel__hub strong {
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.camera-button {
-  min-height: 29px;
-  padding: 0 9px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: var(--muted);
-  background: transparent;
-  font-size: 8px;
-  cursor: pointer;
+.view-wheel.is-open .view-wheel__rims,
+.view-wheel.is-open .view-wheel__wedge {
+  opacity: 1;
+  transform: scale(1);
 }
 
-.camera-button kbd {
-  margin-right: 3px;
-  color: var(--faint);
-  font-family: "DM Mono", monospace;
-  font-size: 7px;
+.view-wheel.is-open .view-wheel__wedge {
+  pointer-events: auto;
 }
 
-.camera-button:hover,
-.camera-button.is-active {
-  border-color: rgba(42, 224, 189, 0.22);
-  color: var(--mint);
-  background: rgba(42, 224, 189, 0.08);
+.view-wheel[data-active="overview"] path[data-for="overview"],
+.view-wheel[data-active="patient"] path[data-for="patient"],
+.view-wheel[data-active="airway"] path[data-for="airway"],
+.view-wheel[data-active="monitor"] path[data-for="monitor"],
+.view-wheel[data-active="equipment"] path[data-for="equipment"] {
+  opacity: 1;
+  stroke-width: 7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-wheel__rims,
+  .view-wheel__wedge {
+    transition: none;
+  }
 }
 
 .patient-caption {
@@ -1438,7 +1538,7 @@
 
 .simulator.is-dashboard .stage__canvas,
 .simulator.is-dashboard .scene-label,
-.simulator.is-dashboard .camera-controls,
+.simulator.is-dashboard .view-wheel,
 .simulator.is-dashboard .patient-caption {
   opacity: 0.12;
   pointer-events: none;
@@ -1499,7 +1599,7 @@
   .monitor-panel { width: 268px; }
   .activity-panel { display: none; }
   .action-dock { right: 286px; left: 16px; min-width: 520px; }
-  .camera-controls { bottom: 188px; }
+  .view-wheel { bottom: 24px; }
   .patient-caption { bottom: 228px; }
   .action-card__copy small { display: none; }
 }
@@ -1523,9 +1623,7 @@
   .vital { min-height: 65px; border-bottom: 0; }
   .vital strong { font-size: 22px; }
   .action-dock { right: 12px; bottom: 12px; left: 12px; height: 160px; min-width: 0; }
-  .camera-controls { bottom: 185px; max-width: calc(100% - 24px); overflow-x: auto; }
-  .camera-controls > span,
-  .camera-button kbd { display: none; }
+  .view-wheel { display: none; }
   .patient-caption { bottom: 229px; width: calc(100% - 38px); }
   .scene-label { display: none; }
   .brief-card { grid-template-columns: 1fr; }
@@ -1545,14 +1643,13 @@
   .vital strong { font-size: 18px; }
   .vital small,
   .vital i { display: none; }
-  .camera-button { padding: 0 7px; }
   .action-dock { height: 174px; }
   .action-list { grid-template-columns: repeat(2, 1fr); max-height: 91px; overflow-y: auto; }
   .action-card { min-height: 42px; }
   .action-card__copy strong { font-size: 8px; }
   .score-block span { display: none; }
   .patient-caption { bottom: 246px; }
-  .camera-controls { bottom: 206px; }
+  .view-wheel { bottom: 20px; }
   .brief-card__content { padding: 34px 26px; }
   .brief-card__content h2 { font-size: 42px; }
   .brief-controls { flex-wrap: wrap; }
