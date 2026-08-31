@@ -756,13 +756,20 @@ async function runSmoke(client, app_url, report) {
     canvas.dispatchEvent(new PointerEvent("pointermove", { clientX: x, clientY: y, bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 150));
     const cursor = canvas.style.cursor;
+    const hover_label = host.querySelector("#region-hover-label");
+    const hover_state = { hidden: hover_label?.hidden, text: hover_label?.textContent };
     canvas.dispatchEvent(new MouseEvent("click", { clientX: x, clientY: y, bubbles: true }));
     const region_events = window.__bound_events.filter(
       (event) => event.type === "selection" && event.kind === "region",
     );
-    return { cursor, region_ids: region_events.map((event) => event.id) };
+    return { cursor, hover_state, region_ids: region_events.map((event) => event.id) };
   })()`);
   assert.equal(region_click.cursor, "pointer", "Hovering a body region must show a pointer cursor.");
+  assert.deepEqual(
+    region_click.hover_state,
+    { hidden: false, text: "Anterior chest" },
+    "Hovering must show the in-room region label.",
+  );
   assert.deepEqual(
     region_click.region_ids,
     ["chestAnterior"],
@@ -773,6 +780,8 @@ async function runSmoke(client, app_url, report) {
   await client.evaluate(`(() => {
     window.__bound_room.emphasizeRegion("chestAnterior");
     window.__bound_room.focusRegion([0, 1.5, -0.6]);
+    window.__bound_room.markRegion("chestAnterior", "abnormal");
+    window.__bound_room.react("wince");
     window.__bound_room.emphasizeRegion(null);
     return true;
   })()`);

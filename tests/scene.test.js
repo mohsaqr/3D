@@ -15,6 +15,7 @@ import {
   findAvatarBone,
   findInteractiveData,
   loadPatientAvatar,
+  setColliderMark,
   poseAvatarInBed,
   tagInteractive,
   updateClinicalScene,
@@ -1055,4 +1056,44 @@ test("attachBodyRegions validates the patient and every region shape", () => {
   ].forEach((bad_region) => {
     assert.throws(() => attachBodyRegions(patient, [bad_region]), /every region needs/);
   });
+});
+
+test("setColliderMark tints regions by exam state and restores cleanly", () => {
+  const patient = createPatient();
+  const [collider] = attachBodyRegions(patient, [
+    { id: "abdomen", label: "Abdomen", center: [0, 1.45, 0.28], size: [0.8, 0.35, 0.8] },
+  ]);
+
+  setColliderMark(collider, "examined");
+  assert.equal(collider.userData.mark, "examined");
+  assert.equal(collider.userData.base_opacity, 0.06);
+  assert.equal(collider.material.color.getHex(), 0x2ae0bd);
+
+  setColliderMark(collider, "abnormal");
+  assert.equal(collider.userData.base_opacity, 0.12);
+  assert.equal(collider.material.color.getHex(), 0xffb84a);
+  assert.equal(collider.material.opacity, 0.12);
+
+  setColliderMark(collider, null);
+  assert.equal(collider.userData.mark, null);
+  assert.equal(collider.material.opacity, 0);
+
+  assert.throws(() => setColliderMark(collider, "polished"), /Unknown region mark/);
+  assert.throws(() => setColliderMark(new THREE.Mesh(), "examined"), /must come from attachBodyRegions/);
+});
+
+test("updateRiggedPatient layers a decaying wince over the ambient face drive", () => {
+  const rig = createSyntheticAnimationRig();
+  const influences = rig.morph_targets[0].morphTargetInfluences;
+  const dictionary = rig.morph_targets[0].morphTargetDictionary;
+
+  rig.reaction = { kind: "wince", start_ms: performance.now() };
+  updateRiggedPatient(rig, "stable", { respiratory_rate: 14 }, 1);
+  assert.ok(influences[dictionary.eyesClosed] > 0.5, "a fresh wince closes the eyes");
+  assert.ok(influences[dictionary.jawOpen] > 0.2, "a fresh wince parts the jaw");
+
+  rig.reaction = { kind: "wince", start_ms: performance.now() - 5_000 };
+  updateRiggedPatient(rig, "stable", { respiratory_rate: 14 }, 1);
+  assert.equal(rig.reaction, null, "an expired reaction clears itself");
+  assert.ok(influences[dictionary.eyesClosed] <= 0.001, "the face returns to the ambient drive");
 });

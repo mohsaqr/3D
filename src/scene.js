@@ -678,16 +678,31 @@ export function updateRiggedPatient(rig, status, vitals, elapsed_seconds) {
 
   const blink = elapsed_seconds % 4.6 < 0.13 ? 1 : 0;
   const mouth_open = (0.035 + Math.max(0, breath_wave) * 0.05) * effort;
+  // One-shot reaction envelope (set by reactPatient): a sharp wince that
+  // decays over ~1.4 s, layered on top of the ambient blink/breathing drive.
+  let wince = 0;
+  if (rig.reaction) {
+    const reaction_age = (performance.now() - rig.reaction.start_ms) / 1000;
+    if (reaction_age > 1.4) {
+      rig.reaction = null;
+    } else {
+      wince = Math.exp(-2.2 * reaction_age);
+    }
+  }
   rig.morph_targets?.forEach((mesh) => {
     const dictionary = mesh.morphTargetDictionary;
     const influences = mesh.morphTargetInfluences;
     ["eyeBlinkLeft", "eyeBlinkRight", "eyesClosed"].forEach((name) => {
       const index = dictionary?.[name];
-      if (index != null) influences[index] = blink;
+      if (index != null) influences[index] = Math.max(blink, wince * 0.85);
     });
     ["jawOpen", "mouthOpen", "viseme_O"].forEach((name) => {
       const index = dictionary?.[name];
-      if (index != null) influences[index] = mouth_open;
+      if (index != null) influences[index] = Math.min(1, mouth_open + wince * 0.3);
+    });
+    ["mouthFrownLeft", "mouthFrownRight", "browDownLeft", "browDownRight"].forEach((name) => {
+      const index = dictionary?.[name];
+      if (index != null) influences[index] = wince * 0.7;
     });
   });
 
@@ -1099,14 +1114,21 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
   let hovered_region = null;
   let emphasized_region = null;
   const regionColliders = () => room.getObjectByName("patient-avatar")?.userData.body_region_colliders;
+  const on_region_hover = typeof options.on_region_hover === "function" ? options.on_region_hover : null;
   const handle_hover = (event) => {
     const colliders = regionColliders();
     if (!colliders?.length) return;
     setPointerFromEvent(event);
     const hit = raycaster.intersectObjects(colliders, false)[0]?.object ?? null;
+    const bounds = renderer.domElement.getBoundingClientRect();
+    on_region_hover?.(
+      hit ? { ...hit.userData.interactive } : null,
+      event.clientX - bounds.left,
+      event.clientY - bounds.top,
+    );
     if (hit === hovered_region) return;
     if (hovered_region && hovered_region !== emphasized_region) {
-      hovered_region.material.opacity = 0;
+      hovered_region.material.opacity = hovered_region.userData.base_opacity ?? 0;
     }
     if (hit && hit !== emphasized_region) {
       hit.material.opacity = 0.16;
@@ -1188,13 +1210,30 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
         throw new Error("region_id must be a non-empty string or null.");
       }
       if (emphasized_region) {
-        emphasized_region.material.opacity = emphasized_region === hovered_region ? 0.16 : 0;
+        emphasized_region.material.opacity = emphasized_region === hovered_region
+          ? 0.16
+          : emphasized_region.userData.base_opacity ?? 0;
       }
       emphasized_region = region_id
         ? regionColliders()?.find((collider) => collider.userData.interactive.id === region_id) ?? null
         : null;
       if (emphasized_region) {
         emphasized_region.material.opacity = 0.22;
+      }
+    },
+    // Persistently tint a region by examination state ("examined"/"abnormal"/null).
+    markRegion(region_id, mark) {
+      const collider = regionColliders()?.find((candidate) => candidate.userData.interactive.id === region_id);
+      if (collider) setColliderMark(collider, mark);
+    },
+    // One-shot facial reaction on the rigged patient (currently: "wince").
+    reactPatient(kind) {
+      if (kind !== "wince") {
+        throw new Error(`Unknown patient reaction: ${kind}`);
+      }
+      const rig = room.getObjectByName("patient-avatar")?.userData.avatar_rig;
+      if (rig) {
+        rig.reaction = { kind, start_ms: performance.now() };
       }
     },
     update(status, vitals, seconds) {
@@ -1258,11 +1297,36 @@ export function attachBodyRegions(patient, regions) {
     collider.position.set(...region.center);
     collider.userData.interactive = { id: region.id, label: region.label, kind: "region" };
     collider.userData.body_region = true;
+    collider.userData.base_opacity = 0;
     patient.add(collider);
     return collider;
   });
   patient.userData.body_region_colliders = colliders;
   return colliders;
+}
+
+/**
+ * Mark a region collider with a persistent examination state.
+ * "examined" tints it faintly teal, "abnormal" amber, null clears the mark.
+ * Hover and emphasis restore to this baseline instead of invisible.
+ * @param {THREE.Mesh} collider A collider from attachBodyRegions.
+ * @param {"examined"|"abnormal"|null} mark Examination state.
+ * @return {THREE.Mesh} The same collider.
+ * @example
+ * setColliderMark(colliders[0], "abnormal");
+ */
+export function setColliderMark(collider, mark) {
+  if (!collider?.userData?.body_region) {
+    throw new Error("collider must come from attachBodyRegions.");
+  }
+  if (mark !== null && !["examined", "abnormal"].includes(mark)) {
+    throw new Error(`Unknown region mark: ${mark}`);
+  }
+  collider.userData.mark = mark;
+  collider.userData.base_opacity = mark === "abnormal" ? 0.12 : mark === "examined" ? 0.06 : 0;
+  collider.material.color.setHex(mark === "abnormal" ? 0xffb84a : 0x2ae0bd);
+  collider.material.opacity = collider.userData.base_opacity;
+  return collider;
 }
 
 /**

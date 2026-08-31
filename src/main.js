@@ -284,6 +284,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         ${bound ? "" : `<div class="scene-label scene-label--patient"><i></i><span>${patient.speaker} · PATIENT</span></div>
         <div class="scene-label scene-label--monitor"><i></i><span>MONITOR</span></div>`}
         <div class="selection-toast" id="selection-toast" hidden></div>
+        <div class="region-hover-label" id="region-hover-label" hidden></div>
 
         <div class="camera-controls" aria-label="Camera views">
           <span>${uiIcon("rotate")} VIEW</span>
@@ -620,9 +621,17 @@ export function mountPatientRoom(container, options = {}) {
   import("./scene.js")
     .then(({ initClinicalScene }) => {
       if (disposed) return;
+      const hover_label = root.querySelector("#region-hover-label");
       scene_controller = initClinicalScene(elements.scene_root, handleSceneSelection, {
         avatar_url: options.avatar_url,
         body_regions: options.body_regions ?? null,
+        on_region_hover: (region, x, y) => {
+          hover_label.hidden = !region;
+          if (region) {
+            hover_label.textContent = region.label;
+            hover_label.style.transform = `translate(${Math.round(x + 14)}px, ${Math.round(y + 12)}px)`;
+          }
+        },
       });
       scene_controller.update(state.status, currentVitals(), state.elapsed_seconds);
       scene_controller.ready.then((loaded_patient) => {
@@ -1012,6 +1021,12 @@ export function mountPatientRoom(container, options = {}) {
     },
     emphasizeRegion(region_id) {
       scene_controller?.setRegionEmphasis(region_id);
+    },
+    markRegion(region_id, mark) {
+      scene_controller?.markRegion(region_id, mark);
+    },
+    react(kind) {
+      scene_controller?.reactPatient(kind);
     },
     getState() {
       return { ...state, actions: [...state.actions], log: [...state.log] };
