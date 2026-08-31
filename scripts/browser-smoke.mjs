@@ -18,6 +18,9 @@ const PROJECT_ROOT = dirname(SCRIPT_DIRECTORY);
 const OUTPUT_DIRECTORY = join(PROJECT_ROOT, "tmp");
 const SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-desktop.png");
 const PATIENT_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-patient.png");
+const TRENDS_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-trends.png");
+const BOUND_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-bound.png");
+const RECORDS_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-records.png");
 const RESULT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-result.json");
 const DESKTOP_VIEWPORT = Object.freeze({ width: 1440, height: 1000 });
 const MOBILE_VIEWPORT = Object.freeze({ width: 390, height: 844 });
@@ -490,6 +493,73 @@ async function runSmoke(client, app_url, report) {
   report.clinical_state = clinical_state;
   report.checks.push("assessment, investigation, and treatment actions updated score, objectives, timeline, and vitals");
 
+  assert.equal(
+    await client.evaluate(`document.querySelectorAll('a[href="#"]').length`),
+    0,
+    "The interface must not contain dead placeholder links.",
+  );
+  assert.match(
+    await client.evaluate(`document.querySelector("#last-reading")?.textContent ?? ""`),
+    /^Last reading · \d{2}:\d{2}$/,
+    "The monitor footer must show the scenario time of the last reading.",
+  );
+
+  await click(client, "#trend-button");
+  await waitForCondition(
+    client,
+    `document.querySelector("#trends-modal")?.classList.contains("is-visible")`,
+    "the vital trends modal",
+  );
+  const trends_state = await client.evaluate(`({
+    hidden: document.querySelector("#trends-modal")?.hidden,
+    rows: document.querySelectorAll("#trends-body .trend-row").length,
+    empty_paths: [...document.querySelectorAll("#trends-body .trend-line")]
+      .filter((path) => !path.getAttribute("d")).length,
+    spo2_severity: document.querySelector('#trends-body [data-trend="oxygen_saturation"]')?.dataset.severity,
+  })`);
+  assert.deepEqual(trends_state, {
+    hidden: false,
+    rows: 4,
+    empty_paths: 0,
+    spo2_severity: "warning",
+  });
+  await wait(350);
+  const trends_screenshot = await client.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+    captureBeyondViewport: false,
+  });
+  await writeFile(TRENDS_SCREENSHOT_PATH, Buffer.from(trends_screenshot.data, "base64"));
+  await click(client, "#trends-close");
+  await waitForCondition(
+    client,
+    `document.querySelector("#trends-modal")?.hidden === true`,
+    "the vital trends modal to close",
+  );
+  report.checks.push("vital trends modal opened with four populated sparklines and closed");
+
+  await click(client, "#timeline-button");
+  const expanded_timeline = await client.evaluate(`({
+    expanded: document.querySelector(".activity-panel")?.classList.contains("is-expanded"),
+    label: document.querySelector("#timeline-button")?.textContent,
+    events: document.querySelectorAll("#timeline-list .timeline-event").length,
+  })`);
+  assert.equal(expanded_timeline.expanded, true, "Expand must open the full clinical timeline.");
+  assert.equal(expanded_timeline.label, "Collapse");
+  assert.equal(
+    expanded_timeline.events,
+    6,
+    "The expanded timeline must show the arrival event plus all five performed actions.",
+  );
+  await click(client, "#timeline-button");
+  const collapsed_timeline = await client.evaluate(`({
+    expanded: document.querySelector(".activity-panel")?.classList.contains("is-expanded"),
+    label: document.querySelector("#timeline-button")?.textContent,
+    events: document.querySelectorAll("#timeline-list .timeline-event").length,
+  })`);
+  assert.deepEqual(collapsed_timeline, { expanded: false, label: "Expand", events: 4 });
+  report.checks.push("clinical timeline expanded to the full event history and collapsed back");
+
   await click(client, '[data-camera="patient"]');
   await wait(750);
   const patient_screenshot = await client.send("Page.captureScreenshot", {
@@ -550,6 +620,196 @@ async function runSmoke(client, app_url, report) {
   report.viewports.mobile = await inspectViewport(client, "mobile", MOBILE_VIEWPORT);
   report.checks.push("mobile viewport has no page-level overflow");
 
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    ...DESKTOP_VIEWPORT,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const bound_state = await client.evaluate(`(async () => {
+    const { mountPatientRoom } = await import("/src/main.js");
+    const host = document.createElement("div");
+    host.id = "bound-host";
+    host.style.cssText = "position:fixed;inset:0;z-index:999;";
+    document.body.appendChild(host);
+    const events = [];
+    const room = mountPatientRoom(host, {
+      mode: "bound",
+      waveform: "host",
+      patient: {
+        name: "Aino Testinen",
+        initials: "AT",
+        age: 61,
+        pronouns: "she/her",
+        speaker: "AINO",
+        case_title: "Palpitations at rest",
+        location: "Rohy · Live case",
+        presenting_concern: "Palpitations and lightheadedness",
+        allergies: "No known drug allergy",
+        // background deliberately omitted: bound mode must show a neutral
+        // placeholder, never the standalone demo patient's history.
+      },
+      records: [
+        {
+          title: "History",
+          entries: [
+            { label: "Chief complaint", value: "Palpitations and lightheadedness" },
+            { label: "PMH", value: "Hypertension; type 2 diabetes" },
+            { label: "Allergies", value: "No known drug allergy" },
+          ],
+        },
+        { title: "Home medications", entries: [{ label: "Metformin", value: "1000 mg PO BID" }] },
+      ],
+      treatments: {
+        available: [
+          { name: "Oxygen", detail: "Nasal cannula · 2 L/min", treatment_type: "oxygen" },
+          { name: "Metoprolol", detail: "IV · 5 mg", treatment_type: "medication" },
+        ],
+      },
+      on_event: (event) => events.push(event),
+    });
+    window.__bound_room = room;
+    window.__bound_events = events;
+    room.update(
+      { heart_rate: 88, oxygen_saturation: 97, respiratory_rate: 14, systolic: 122, diastolic: 78, temperature: 36.9 },
+      null,
+      30,
+      { rhythm: "Atrial fibrillation" },
+    );
+    room.addTimelineEvent("Oxygen 2 L/min started.", "action", 30);
+    return {
+      hr: host.querySelector("#vital-heart_rate [data-vital-value]")?.textContent,
+      spo2_severity: host.querySelector("#vital-oxygen_saturation")?.dataset.severity,
+      status: host.querySelector(".simulator")?.dataset.status,
+      time: host.querySelector("#case-time")?.textContent,
+      case_title: host.querySelector(".case-heading h1")?.textContent,
+      has_patient_panel: Boolean(host.querySelector(".patient-panel")),
+      has_timeline: Boolean(host.querySelector(".activity-panel")),
+      has_action_dock: Boolean(host.querySelector(".action-dock")),
+      has_brief_modal: Boolean(host.querySelector("#brief-modal")),
+      has_sound_button: Boolean(host.querySelector("#sound-button")),
+      has_dashboard_button: Boolean(host.querySelector("#dashboard-button")),
+      has_scene_labels: Boolean(host.querySelector(".scene-label")),
+      has_monitor_panel: Boolean(host.querySelector(".monitor-panel")),
+      has_camera_controls: Boolean(host.querySelector(".camera-controls")),
+      caption_hidden: host.querySelector("#patient-caption")?.hidden,
+      status_event_emitted: events.some((event) => event.type === "status"),
+      host_canvas: room.ecg_canvas instanceof HTMLCanvasElement,
+      internal_wave_absent: !host.querySelector("#ecg-path"),
+      rhythm_label: host.querySelector("#rhythm-label")?.textContent,
+    };
+  })()`);
+  assert.deepEqual(bound_state, {
+    hr: "88",
+    spo2_severity: "normal",
+    status: "stable",
+    time: "00:30",
+    case_title: "Palpitations at rest",
+    has_patient_panel: false,
+    has_timeline: false,
+    has_action_dock: false,
+    has_brief_modal: false,
+    has_sound_button: false,
+    has_dashboard_button: false,
+    has_scene_labels: false,
+    has_monitor_panel: true,
+    has_camera_controls: true,
+    caption_hidden: true,
+    status_event_emitted: true,
+    host_canvas: true,
+    internal_wave_absent: true,
+    rhythm_label: "Atrial fibrillation",
+  });
+
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #scene-root")?.dataset.avatarReady === "true"`,
+    "the bound room's avatar",
+  );
+  await client.evaluate(`window.__bound_room.say("The fluttering in my chest has eased a little.")`);
+  assert.deepEqual(
+    await client.evaluate(`({
+      caption_hidden: document.querySelector("#bound-host #patient-caption")?.hidden,
+      caption_text: document.querySelector("#bound-host #patient-caption p")?.textContent,
+    })`),
+    {
+      caption_hidden: false,
+      caption_text: "“The fluttering in my chest has eased a little.”",
+    },
+  );
+  const treatments_state = await client.evaluate(`(() => {
+    const host = document.querySelector("#bound-host");
+    window.__bound_room.openTreatments();
+    host.querySelector('.treatment-order[data-order-index="0"]').click();
+    const order_events = window.__bound_events.filter((event) => event.type === "order_request");
+    window.__bound_room.setActiveTreatments([
+      { name: "Oxygen", detail: "Nasal cannula · 2 L/min", status: "administered" },
+    ]);
+    const state = {
+      order_event_count: order_events.length,
+      ordered_name: order_events[0]?.treatment?.name,
+      ordered_type: order_events[0]?.treatment?.treatment_type,
+      active_rows: host.querySelectorAll("#treatments-body .treatment-row--administered").length,
+      button_label: host.querySelector("#treatments-button")?.textContent,
+    };
+    host.querySelector("#treatments-close").click();
+    return state;
+  })()`);
+  assert.deepEqual(treatments_state, {
+    order_event_count: 1,
+    ordered_name: "Oxygen",
+    ordered_type: "oxygen",
+    active_rows: 1,
+    button_label: "Treatments (1)",
+  });
+
+  await client.evaluate(`document.querySelector("#bound-host #records-button").click()`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #records-modal")?.classList.contains("is-visible")`,
+    "the medical records modal",
+  );
+  const records_state = await client.evaluate(`({
+    sections: [...document.querySelectorAll("#bound-host .records-section h3")].map((h) => h.textContent),
+    chief_complaint: [...document.querySelectorAll("#bound-host .records-list dd")][0]?.textContent,
+  })`);
+  assert.deepEqual(records_state, {
+    sections: ["History", "Home medications"],
+    chief_complaint: "Palpitations and lightheadedness",
+  });
+  await wait(400);
+  const records_screenshot = await client.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+    captureBeyondViewport: false,
+  });
+  await writeFile(RECORDS_SCREENSHOT_PATH, Buffer.from(records_screenshot.data, "base64"));
+  await client.evaluate(`document.querySelector("#bound-host #records-close").click()`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #records-modal")?.hidden === true`,
+    "the medical records modal to close",
+  );
+  report.checks.push("bound records and treatments panels showed host data, emitted an order, and tracked the active order");
+
+  await wait(600);
+  const bound_screenshot = await client.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+    captureBeyondViewport: false,
+  });
+  await writeFile(BOUND_SCREENSHOT_PATH, Buffer.from(bound_screenshot.data, "base64"));
+
+  const disposed_clean = await client.evaluate(`(() => {
+    const host = document.querySelector("#bound-host");
+    window.__bound_room.dispose();
+    const clean = host.innerHTML === "" && !host.classList.contains("rohy3d-root");
+    host.remove();
+    delete window.__bound_room;
+    return clean;
+  })()`);
+  assert.equal(disposed_clean, true, "Bound-mode dispose must leave the host element empty.");
+  report.checks.push("bound mode kept only live-data chrome (no demo controls, labels, or parked caption), mirrored rhythm and ECG canvas, said a line on demand, and disposed cleanly");
+
   await wait(150);
   assert.deepEqual(page_errors, [], `Page errors were reported:\n${JSON.stringify(page_errors, null, 2)}`);
   report.checks.push("no uncaught exceptions or console errors were reported");
@@ -568,6 +828,7 @@ async function main() {
     artifacts: {
       screenshot: relative(PROJECT_ROOT, SCREENSHOT_PATH),
       patient_screenshot: relative(PROJECT_ROOT, PATIENT_SCREENSHOT_PATH),
+      trends_screenshot: relative(PROJECT_ROOT, TRENDS_SCREENSHOT_PATH),
       result: relative(PROJECT_ROOT, RESULT_PATH),
     },
     checks: [],

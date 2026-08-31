@@ -11,6 +11,7 @@ import {
   deriveObjectives,
   derivePatientStatus,
   deriveVitals,
+  deriveVitalTrends,
   groupActions,
   tickSimulation,
   validateState,
@@ -547,6 +548,72 @@ test("clamp rejects non-finite operands and reversed bounds", () => {
     assert.throws(
       () => clamp(...arguments_),
       /clamp requires finite numbers and minimum <= maximum/,
+    );
+  });
+});
+
+test("deriveVitalTrends samples from baseline to the present with one row per sample", () => {
+  const start = createSimulation({ running: true });
+  const after_time = tickSimulation(start, 60);
+  const trends = deriveVitalTrends(after_time, { samples: 5 });
+
+  assert.equal(trends.length, 5);
+  assert.equal(trends[0].time, 0);
+  assert.equal(trends[trends.length - 1].time, 60);
+  trends.slice(1).forEach((row, index) => {
+    assert.ok(row.time >= trends[index].time, "sample times must be non-decreasing");
+  });
+  assert.deepEqual(
+    { ...trends[0] },
+    { time: 0, ...deriveVitals(createSimulation()) },
+    "the first sample must equal untreated baseline vitals",
+  );
+  assert.deepEqual(
+    { ...trends[trends.length - 1] },
+    { time: 60, ...deriveVitals(after_time) },
+    "the final sample must equal the current derived vitals",
+  );
+});
+
+test("deriveVitalTrends applies each action only from its logged time onward", () => {
+  const start = createSimulation({ running: true });
+  const before_treatment = tickSimulation(start, 30);
+  const treated = applyClinicalAction(before_treatment, "apply_oxygen").state;
+  const settled = tickSimulation(treated, 26);
+  assert.equal(settled.elapsed_seconds, 60);
+
+  const trends = deriveVitalTrends(settled, { samples: 7 });
+  const untreated_rows = trends.filter((row) => row.time < 30);
+  const treated_rows = trends.filter((row) => row.time > 34);
+  assert.ok(untreated_rows.length >= 2 && treated_rows.length >= 2);
+  untreated_rows.forEach((row) => {
+    assert.ok(
+      row.oxygen_saturation <= BASELINE_VITALS.oxygen_saturation,
+      "before oxygen the saturation must not exceed baseline",
+    );
+  });
+  treated_rows.forEach((row) => {
+    assert.ok(
+      row.oxygen_saturation > BASELINE_VITALS.oxygen_saturation,
+      "after oxygen the saturation must rise above baseline",
+    );
+  });
+});
+
+test("deriveVitalTrends with no elapsed time returns constant baseline rows", () => {
+  const trends = deriveVitalTrends(createSimulation(), { samples: 3 });
+  assert.equal(trends.length, 3);
+  trends.forEach((row) => {
+    assert.deepEqual({ ...row }, { time: 0, ...deriveVitals(createSimulation()) });
+  });
+});
+
+test("deriveVitalTrends validates its state and sampling options", () => {
+  assert.throws(() => deriveVitalTrends(null), /state must be an object/);
+  [0, 1, 2.5, "6", Number.NaN].forEach((samples) => {
+    assert.throws(
+      () => deriveVitalTrends(createSimulation(), { samples }),
+      /samples must be an integer of at least 2/,
     );
   });
 });

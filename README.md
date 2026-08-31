@@ -33,19 +33,22 @@ The browser test launches an isolated headless Chrome session, exercises the roo
 - Full procedural room: patient bed, shaped blanket, monitor, oxygen station, IV pole, cabinet, examination lamp, window, and privacy curtain.
 - Textured 1.815 m AvatarSDK patient with a 73-joint full-body skeleton, separate clothing and shoes, facial morph targets, and a neutral supine pose.
 - Live patient behavior: respiratory-rate-driven breathing effort, blinking, subtle head and shoulder movement, status-sensitive complexion, and bedside status-light changes.
-- Responsive vital signs and animated ECG waveform.
+- Responsive vital signs, animated ECG waveform, and a vital-trends review reconstructed from the clinical timeline.
 - Assess, investigate, and treat action groups with immediate clinical feedback.
-- Four learning objectives, clinical score, patient dialogue, timeline, and outcome checkpoint.
+- Four learning objectives, clinical score, patient dialogue, expandable timeline, and outcome checkpoint.
 - Clickable 3D objects plus five camera presets.
-- Pause, mute, high-contrast, simplified dashboard, keyboard, and reduced-motion support.
-- WebGL fallback that preserves the accessible clinical controls.
+- Web Audio pulse beep whose pitch falls with desaturation, with a working mute control.
+- Pause, high-contrast, simplified dashboard, keyboard, and reduced-motion support.
+- Avatar loading retries transient failures; if it still fails, a visible "reduced visuals" notice accompanies the procedural fallback, and a WebGL fallback preserves the accessible clinical controls.
 
 ## Architecture
 
-- `src/simulation.js` is a deterministic, renderer-independent scenario engine.
-- `src/scene.js` creates the Three.js room, loads and poses the rigged avatar, and animates its physiology.
-- `src/main.js` binds the simulation to the accessible HTML interface and lazy-loads the 3D scene.
-- `tests/` covers physiology, state transitions, room composition, rig animation, avatar structure, licensing, and input validation.
-- `scripts/browser-smoke.mjs` provides dependency-free browser regression coverage through Chrome DevTools Protocol.
+- `src/simulation.js` is a deterministic, renderer-independent scenario engine, including trend reconstruction from the action log.
+- `src/scene.js` creates the Three.js room, loads and poses the rigged avatar with retry, and animates its physiology.
+- `src/ui-helpers.js` holds the pure, DOM-free presentation helpers (clock, severities, ECG and trend paths, beep pitch) so they stay unit-testable.
+- `src/main.js` binds the simulation to the accessible HTML interface, drives monitor audio, and lazy-loads the 3D scene.
+- `tests/` covers physiology, trends, state transitions, room composition, rig animation, avatar structure, retry behavior, licensing, presentation helpers, and input validation.
+- `scripts/browser-smoke.mjs` provides dependency-free browser regression coverage through Chrome DevTools Protocol, including the trends modal, timeline expansion, and a dead-link guard.
+- [`docs/ROHY-INTEGRATION.md`](docs/ROHY-INTEGRATION.md) is the phased plan for embedding this room in the Rohy simulator.
 
 The room and equipment geometry are created in code. The bundled example patient is Rohy's existing AvatarSDK full-body GLB from the MIT-licensed TalkingHead demonstration set; attribution is recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). If the model cannot load, an accessible procedural fallback keeps the scenario usable. Clinical content is demonstrative and is explicitly labeled as a training prototype, not clinical guidance.

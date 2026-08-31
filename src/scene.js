@@ -2,27 +2,81 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { clone as cloneSkeleton } from "three/addons/utils/SkeletonUtils.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { RectAreaLightUniformsLib } from "three/addons/lights/RectAreaLightUniformsLib.js";
 
 const DEFAULT_PATIENT_AVATAR_URL = "/avatars/avatarsdk.glb";
 
+// Physically-plausible hospital albedos: whites, laminates, powder-coated and
+// chromed steel. Mood comes from the lighting, not from tinted materials.
 const COLORS = Object.freeze({
-  navy: 0x08171c,
-  wall: 0x102a2f,
-  wall_light: 0x18383b,
+  navy: 0x11151a,
+  wall: 0xb7bdb6,
+  wall_light: 0xc9cfc7,
   teal: 0x32d9bd,
-  teal_dark: 0x0a736c,
+  teal_dark: 0x2e6f63,
   mint: 0xa7f3df,
   coral: 0xff725e,
   amber: 0xffb84a,
-  cream: 0xe9f1ea,
-  steel: 0x8ba3a5,
-  bed: 0xb8d3ce,
+  cream: 0xf1f2ee,
+  steel: 0xd3d8dc,
+  bed: 0xd9cfbd,
   skin: 0xc98d72,
   skin_light: 0xe0aa8d,
-  gown: 0x347d87,
-  blanket: 0x4f9691,
-  charcoal: 0x132024,
+  gown: 0x8fb3ab,
+  blanket: 0xcfe0d8,
+  charcoal: 0x23272b,
 });
+
+/**
+ * Procedural speckled-linoleum texture. Returns null outside the browser so
+ * the geometry tests can build the room in Node.
+ */
+function createLinoleumTexture() {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#aeb3ac";
+  context.fillRect(0, 0, 512, 512);
+  Array.from({ length: 2600 }, (_, index) => index).forEach(() => {
+    const shade = 150 + Math.floor(Math.random() * 70);
+    context.fillStyle = `rgba(${shade}, ${shade + 3}, ${shade - 2}, ${0.25 + Math.random() * 0.4})`;
+    const size = 1 + Math.random() * 2.4;
+    context.fillRect(Math.random() * 512, Math.random() * 512, size, size);
+  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(4, 3.4);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/**
+ * Soft night-sky gradient for the window backdrop. Null outside the browser.
+ */
+function createNightSkyTexture() {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  const gradient = context.createLinearGradient(0, 0, 0, 256);
+  gradient.addColorStop(0, "#1d3450");
+  gradient.addColorStop(0.55, "#152438");
+  gradient.addColorStop(1, "#2c2f31");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 256, 256);
+  Array.from({ length: 260 }, (_, index) => index).forEach(() => {
+    context.fillStyle = `rgba(255, ${210 + Math.floor(Math.random() * 45)}, 170, ${0.25 + Math.random() * 0.65})`;
+    context.fillRect(Math.random() * 256, 120 + Math.random() * 130, 1.6, 1.9);
+  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 
 const CAMERA_PRESETS = Object.freeze({
   overview: {
@@ -58,9 +112,10 @@ export function createClinicalRoom() {
   room.name = "clinical-room";
 
   const floor_material = new THREE.MeshStandardMaterial({
-    color: COLORS.navy,
-    roughness: 0.78,
-    metalness: 0.08,
+    color: 0xb3b8b1,
+    map: createLinoleumTexture(),
+    roughness: 0.42,
+    metalness: 0.02,
   });
   const floor = createBox("floor", [12, 0.14, 10], floor_material, [0, -0.08, 0]);
   floor.receiveShadow = true;
@@ -68,17 +123,31 @@ export function createClinicalRoom() {
 
   const wall_material = new THREE.MeshStandardMaterial({
     color: COLORS.wall,
-    roughness: 0.92,
+    roughness: 0.94,
   });
   room.add(createBox("back-wall", [12, 5.5, 0.18], wall_material, [0, 2.72, -5]));
   room.add(createBox("left-wall", [0.18, 5.5, 10], wall_material, [-6, 2.72, 0]));
 
-  const grid = new THREE.GridHelper(12, 24, COLORS.teal_dark, COLORS.wall_light);
-  grid.name = "floor-grid";
-  grid.material.transparent = true;
-  grid.material.opacity = 0.26;
-  grid.position.y = 0.005;
-  room.add(grid);
+  const ceiling = createBox(
+    "ceiling",
+    [12, 0.14, 10],
+    new THREE.MeshStandardMaterial({ color: 0xdfe2dd, roughness: 0.96 }),
+    [0, 5.54, 0],
+  );
+  ceiling.castShadow = false;
+  room.add(ceiling);
+
+  // Sage accent band behind the bed head, as hospitals paint them.
+  room.add(createBox(
+    "headwall-accent",
+    [12, 1.9, 0.04],
+    new THREE.MeshStandardMaterial({ color: 0x9db4a8, roughness: 0.9 }),
+    [0, 2.2, -4.9],
+  ));
+  // Skirting and wall-protection rails.
+  const trim_material = new THREE.MeshStandardMaterial({ color: 0x9ba19b, roughness: 0.6 });
+  room.add(createBox("skirting", [12, 0.22, 0.05], trim_material, [0, 0.11, -4.93]));
+  room.add(createBox("skirting", [0.05, 0.22, 10], trim_material, [-5.93, 0.11, 0]));
 
   room.add(createWindow());
   room.add(createBed());
@@ -104,23 +173,41 @@ export function createBed() {
   const group = new THREE.Group();
   group.name = "patient-bed";
   const frame_material = new THREE.MeshStandardMaterial({
-    color: COLORS.steel,
-    roughness: 0.32,
-    metalness: 0.66,
+    color: 0xe3e6e8,
+    roughness: 0.38,
+    metalness: 0.72,
   });
-  const mattress_material = new THREE.MeshStandardMaterial({
-    color: COLORS.cream,
-    roughness: 0.88,
+  const linen_material = new THREE.MeshStandardMaterial({
+    color: 0xf5f6f3,
+    roughness: 0.82,
   });
-  const accent_material = new THREE.MeshStandardMaterial({
-    color: COLORS.teal_dark,
-    roughness: 0.45,
+  const laminate_material = new THREE.MeshStandardMaterial({
+    color: COLORS.bed,
+    roughness: 0.48,
+    metalness: 0.04,
   });
 
   group.add(createBox("bed-frame", [2.35, 0.18, 4.75], frame_material, [0, 0.82, 0]));
-  group.add(createBox("mattress", [2.15, 0.3, 4.45], mattress_material, [0, 1.02, 0]));
-  group.add(createBox("headboard", [2.38, 1.12, 0.14], accent_material, [0, 1.22, -2.33]));
-  group.add(createBox("footboard", [2.38, 0.78, 0.14], accent_material, [0, 1.08, 2.33]));
+  // Under-bed deck and equipment tray give the frame real depth.
+  group.add(createBox("bed-deck", [2.1, 0.34, 4.35], new THREE.MeshStandardMaterial({ color: 0xaeb4b8, roughness: 0.55, metalness: 0.4 }), [0, 0.62, 0]));
+
+  const mattress = new THREE.Mesh(new RoundedBoxGeometry(2.15, 0.34, 4.45, 4, 0.09), linen_material);
+  mattress.name = "mattress";
+  mattress.position.set(0, 1.02, 0);
+  mattress.castShadow = true;
+  mattress.receiveShadow = true;
+  group.add(mattress);
+
+  const headboard = new THREE.Mesh(new RoundedBoxGeometry(2.38, 1.12, 0.14, 3, 0.05), laminate_material);
+  headboard.name = "headboard";
+  headboard.position.set(0, 1.22, -2.33);
+  headboard.castShadow = true;
+  group.add(headboard);
+  const footboard = new THREE.Mesh(new RoundedBoxGeometry(2.38, 0.78, 0.14, 3, 0.05), laminate_material);
+  footboard.name = "footboard";
+  footboard.position.set(0, 1.08, 2.33);
+  footboard.castShadow = true;
+  group.add(footboard);
 
   [-1.02, 1.02].forEach((x_position) => {
     group.add(createRail(x_position));
@@ -129,31 +216,31 @@ export function createBed() {
     [-1.78, 1.78].forEach((z_position) => {
       const leg = createCylinder(
         "bed-leg",
-        0.065,
-        0.065,
-        0.78,
+        0.05,
+        0.06,
+        0.62,
         frame_material,
-        [x_position, 0.43, z_position],
+        [x_position, 0.42, z_position],
       );
       group.add(leg);
+      const caster_fork = createCylinder("bed-wheel-fork", 0.035, 0.035, 0.14, frame_material, [x_position, 0.16, z_position]);
+      group.add(caster_fork);
       const wheel = new THREE.Mesh(
-        new THREE.TorusGeometry(0.12, 0.045, 8, 16),
-        new THREE.MeshStandardMaterial({ color: COLORS.charcoal, roughness: 0.62 }),
+        new THREE.CylinderGeometry(0.095, 0.095, 0.07, 20),
+        new THREE.MeshStandardMaterial({ color: COLORS.charcoal, roughness: 0.5 }),
       );
       wheel.name = "bed-wheel";
-      wheel.rotation.y = Math.PI / 2;
-      wheel.position.set(x_position, 0.11, z_position);
+      wheel.rotation.z = Math.PI / 2;
+      wheel.position.set(x_position, 0.095, z_position);
+      wheel.castShadow = true;
       group.add(wheel);
     });
   });
 
-  const pillow = new THREE.Mesh(
-    new THREE.SphereGeometry(0.58, 32, 18),
-    mattress_material,
-  );
+  const pillow = new THREE.Mesh(new RoundedBoxGeometry(1.42, 0.24, 0.78, 4, 0.1), linen_material);
   pillow.name = "pillow";
-  pillow.scale.set(1.3, 0.28, 0.72);
-  pillow.position.set(0, 1.3, -1.66);
+  pillow.position.set(0, 1.28, -1.66);
+  pillow.rotation.x = -0.06;
   pillow.castShadow = true;
   group.add(pillow);
 
@@ -320,24 +407,52 @@ export function createPatient() {
 }
 
 /**
- * Load and configure Rohy's existing full-body AvatarSDK patient.
+ * Load and configure Rohy's existing full-body AvatarSDK patient, retrying
+ * transient failures before the caller falls back to the procedural patient.
  * @param {string} url GLB asset URL.
  * @param {{loadAsync: (url: string) => Promise<{scene: THREE.Object3D}>}} [loader] GLTF loader.
+ * @param {{attempts?: number, retry_delay_ms?: number}} [options] Retry configuration.
  * @return {Promise<THREE.Group>} Configured patient wrapper.
  * @example
  * const patient = await loadPatientAvatar("/avatars/patient.glb");
  */
-export async function loadPatientAvatar(url, loader = new GLTFLoader()) {
+export async function loadPatientAvatar(url, loader = new GLTFLoader(), options = {}) {
   if (typeof url !== "string" || url.length === 0) {
     throw new Error("url must be a non-empty string.");
   }
   if (!loader || typeof loader.loadAsync !== "function") {
     throw new Error("loader must provide loadAsync(url).");
   }
-  const gltf = await loader.loadAsync(url);
-  if (!(gltf?.scene instanceof THREE.Object3D)) {
-    throw new Error("The avatar GLB did not contain a valid scene.");
+  const attempts = options.attempts ?? 3;
+  const retry_delay_ms = options.retry_delay_ms ?? 600;
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new Error("options.attempts must be an integer of at least 1.");
   }
+  if (!Number.isFinite(retry_delay_ms) || retry_delay_ms < 0) {
+    throw new Error("options.retry_delay_ms must be a non-negative finite number.");
+  }
+
+  const attemptLoad = async (remaining_attempts) => {
+    try {
+      const gltf = await loader.loadAsync(url);
+      if (!(gltf?.scene instanceof THREE.Object3D)) {
+        throw new Error("The avatar GLB did not contain a valid scene.");
+      }
+      return gltf;
+    } catch (error) {
+      if (remaining_attempts <= 1) {
+        throw error;
+      }
+      console.warn(
+        `Avatar load failed (${attempts - remaining_attempts + 1}/${attempts}); retrying in ${retry_delay_ms} ms.`,
+        error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, retry_delay_ms));
+      return attemptLoad(remaining_attempts - 1);
+    }
+  };
+
+  const gltf = await attemptLoad(attempts);
   return configurePatientAvatar(cloneSkeleton(gltf.scene));
 }
 
@@ -599,9 +714,12 @@ export function updateRiggedPatient(rig, status, vitals, elapsed_seconds) {
 function createPatientBlanket() {
   const group = new THREE.Group();
   group.name = "patient-bed-cover";
-  const blanket_material = new THREE.MeshStandardMaterial({
+  const blanket_material = new THREE.MeshPhysicalMaterial({
     color: COLORS.blanket,
-    roughness: 0.94,
+    roughness: 0.92,
+    sheen: 0.55,
+    sheenRoughness: 0.85,
+    sheenColor: new THREE.Color(0xffffff),
   });
   const blanket_geometry = new THREE.PlaneGeometry(1.62, 2.02, 24, 32);
   const positions = blanket_geometry.attributes.position;
@@ -635,23 +753,33 @@ export function createMonitor() {
   const group = new THREE.Group();
   group.name = "vital-sign-monitor";
   const shell_material = new THREE.MeshStandardMaterial({
-    color: 0x294044,
-    roughness: 0.35,
-    metalness: 0.32,
+    color: 0x2b3036,
+    roughness: 0.42,
+    metalness: 0.18,
   });
   const screen_material = new THREE.MeshStandardMaterial({
-    color: 0x061316,
-    emissive: 0x0a504b,
-    emissiveIntensity: 0.3,
-    roughness: 0.22,
+    color: 0x04090d,
+    emissive: 0x07242c,
+    emissiveIntensity: 0.85,
+    roughness: 0.12,
+    metalness: 0.05,
   });
 
-  group.add(createBox("monitor-shell", [1.55, 1.04, 0.22], shell_material, [3.2, 2.45, -1.47]));
-  const screen = createBox("monitor-screen", [1.37, 0.84, 0.04], screen_material, [3.2, 2.45, -1.335]);
+  const shell = new THREE.Mesh(new RoundedBoxGeometry(1.55, 1.04, 0.2, 4, 0.05), shell_material);
+  shell.name = "monitor-shell";
+  shell.position.set(3.2, 2.45, -1.47);
+  shell.castShadow = true;
+  group.add(shell);
+  const screen = createBox("monitor-screen", [1.37, 0.84, 0.04], screen_material, [3.2, 2.45, -1.355]);
   screen.userData.status_light = true;
   group.add(screen);
-  group.add(createCylinder("monitor-pole", 0.055, 0.065, 1.62, shell_material, [3.2, 1.28, -1.52]));
-  group.add(createBox("monitor-base", [0.8, 0.1, 0.58], shell_material, [3.2, 0.48, -1.5]));
+  const pole_material = new THREE.MeshStandardMaterial({ color: 0xc9ced2, roughness: 0.28, metalness: 0.8 });
+  group.add(createCylinder("monitor-pole", 0.045, 0.055, 1.62, pole_material, [3.2, 1.28, -1.52]));
+  const base = new THREE.Mesh(new RoundedBoxGeometry(0.8, 0.1, 0.58, 3, 0.04), pole_material);
+  base.name = "monitor-base";
+  base.position.set(3.2, 0.48, -1.5);
+  base.castShadow = true;
+  group.add(base);
 
   const status_led = new THREE.Mesh(
     new THREE.SphereGeometry(0.045, 16, 12),
@@ -684,33 +812,64 @@ export function createOxygenStation() {
   const group = new THREE.Group();
   group.name = "oxygen-station";
   const metal = new THREE.MeshStandardMaterial({
-    color: COLORS.steel,
-    roughness: 0.4,
-    metalness: 0.55,
+    color: 0xc6cbd0,
+    roughness: 0.3,
+    metalness: 0.75,
   });
-  const green = new THREE.MeshStandardMaterial({
-    color: COLORS.teal_dark,
-    roughness: 0.48,
+  const body_white = new THREE.MeshStandardMaterial({
+    color: 0xe9ebe8,
+    roughness: 0.35,
+    metalness: 0.25,
+  });
+  const shoulder_green = new THREE.MeshStandardMaterial({
+    color: 0x3a7d52,
+    roughness: 0.38,
+    metalness: 0.3,
   });
 
-  const cylinder = createCylinder("oxygen-cylinder", 0.27, 0.3, 1.35, green, [-3.55, 0.72, -1.15]);
+  // Medical O2 cylinder: white body, green shoulder, valve and gauge.
+  const cylinder = createCylinder("oxygen-cylinder", 0.24, 0.26, 1.18, body_white, [-3.55, 0.63, -1.15]);
   cylinder.castShadow = true;
   group.add(cylinder);
-  group.add(createCylinder("oxygen-cap", 0.12, 0.18, 0.2, metal, [-3.55, 1.49, -1.15]));
-  group.add(createBox("oxygen-panel", [1.35, 0.72, 0.16], metal, [-3.25, 2.72, -4.84]));
+  group.add(createCylinder("oxygen-shoulder", 0.2, 0.24, 0.28, shoulder_green, [-3.55, 1.34, -1.15]));
+  group.add(createCylinder("oxygen-cap", 0.055, 0.075, 0.18, metal, [-3.55, 1.53, -1.15]));
+  const gauge = createCylinder("oxygen-gauge", 0.075, 0.075, 0.05, metal, [-3.55, 1.62, -1.15]);
+  gauge.rotation.x = Math.PI / 2;
+  group.add(gauge);
+  const gauge_face = createCylinder(
+    "oxygen-gauge-face",
+    0.06,
+    0.06,
+    0.012,
+    new THREE.MeshStandardMaterial({ color: 0xf4f5f2, roughness: 0.3 }),
+    [-3.55, 1.62, -1.125],
+  );
+  gauge_face.rotation.x = Math.PI / 2;
+  group.add(gauge_face);
+  // Cylinder trolley ring.
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.28, 0.02, 10, 28),
+    metal,
+  );
+  ring.name = "oxygen-ring";
+  ring.rotation.x = Math.PI / 2;
+  ring.position.set(-3.55, 1.05, -1.15);
+  group.add(ring);
 
-  [-3.62, -3.15, -2.68].forEach((x_position, index) => {
+  // Headwall gas outlets: white panel with color-coded sockets.
+  group.add(createBox("oxygen-panel", [1.35, 0.5, 0.1], body_white, [-3.25, 2.72, -4.87]));
+  [-3.62, -3.25, -2.88].forEach((x_position, index) => {
     const port = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.1, 0.1, 0.12, 20),
+      new THREE.CylinderGeometry(0.065, 0.065, 0.1, 20),
       new THREE.MeshStandardMaterial({
-        color: index === 0 ? COLORS.teal : index === 1 ? COLORS.amber : COLORS.steel,
-        emissive: index === 0 ? COLORS.teal_dark : 0,
-        emissiveIntensity: 0.45,
+        color: index === 0 ? 0xffffff : index === 1 ? 0x3a7d52 : 0x555a5f,
+        roughness: 0.35,
+        metalness: 0.35,
       }),
     );
     port.name = "oxygen-port";
     port.rotation.x = Math.PI / 2;
-    port.position.set(x_position, 2.72, -4.72);
+    port.position.set(x_position, 2.72, -4.79);
     group.add(port);
   });
   tagInteractive(group, "oxygen", "Controlled oxygen");
@@ -784,7 +943,11 @@ export function updateClinicalScene(room, status, vitals, elapsed_seconds) {
  * @example
  * const controller = initClinicalScene(document.body);
  */
-export function initClinicalScene(container, on_select = () => {}) {
+export function initClinicalScene(container, on_select = () => {}, options = {}) {
+  const avatar_url = options.avatar_url ?? DEFAULT_PATIENT_AVATAR_URL;
+  if (typeof avatar_url !== "string" || avatar_url.length === 0) {
+    throw new Error("options.avatar_url must be a non-empty string when provided.");
+  }
   if (!(container instanceof HTMLElement)) {
     throw new Error("container must be an HTMLElement.");
   }
@@ -794,7 +957,7 @@ export function initClinicalScene(container, on_select = () => {}) {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(COLORS.navy);
-  scene.fog = new THREE.FogExp2(COLORS.navy, 0.035);
+  scene.fog = new THREE.FogExp2(COLORS.navy, 0.016);
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
   camera.position.copy(CAMERA_PRESETS.overview.position);
 
@@ -802,12 +965,19 @@ export function initClinicalScene(container, on_select = () => {}) {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 1.22;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
-  renderer.domElement.setAttribute("aria-label", "Interactive 3D clinical room with Daniel in bed");
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.domElement.setAttribute("aria-label", "Interactive 3D patient room");
   renderer.domElement.setAttribute("role", "img");
   container.appendChild(renderer.domElement);
+
+  // Image-based lighting: every PBR material picks up soft studio reflections,
+  // which is most of the difference between "toy" and "physical".
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.06).texture;
+  scene.environmentIntensity = 0.42;
+  pmrem.dispose();
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.copy(CAMERA_PRESETS.overview.target);
@@ -819,18 +989,34 @@ export function initClinicalScene(container, on_select = () => {}) {
   controls.minPolarAngle = Math.PI * 0.17;
   controls.maxPolarAngle = Math.PI * 0.48;
 
-  scene.add(new THREE.HemisphereLight(0xb6fff0, 0x173038, 1.9));
-  const key_light = new THREE.SpotLight(0xfff0db, 48, 22, Math.PI / 5.5, 0.52, 1.2);
-  key_light.position.set(1.2, 7.8, 2.6);
-  key_light.target.position.set(0, 1, 0);
+  scene.add(new THREE.HemisphereLight(0xdde7e4, 0x3b4145, 0.5));
+
+  // Recessed ceiling luminaire over the bed (matches ceiling-light-panel).
+  RectAreaLightUniformsLib.init();
+  const ceiling_light = new THREE.RectAreaLight(0xf6f8f2, 5.2, 2.6, 1.3);
+  ceiling_light.position.set(0.4, 5.42, -0.4);
+  ceiling_light.lookAt(0.4, 0, -0.4);
+  scene.add(ceiling_light);
+
+  // Warm key from the corridor side; the only shadow-casting light.
+  const key_light = new THREE.SpotLight(0xffe9cd, 65, 24, Math.PI / 4.6, 0.65, 1.35);
+  key_light.position.set(3.6, 5.1, 3.6);
+  key_light.target.position.set(-0.3, 0.9, -0.4);
   key_light.castShadow = true;
-  key_light.shadow.mapSize.set(1024, 1024);
+  key_light.shadow.mapSize.set(2048, 2048);
+  key_light.shadow.bias = -0.0002;
+  key_light.shadow.radius = 4;
   scene.add(key_light, key_light.target);
-  const accent_light = new THREE.PointLight(COLORS.teal, 12, 8, 1.5);
-  accent_light.position.set(-3.5, 2.8, -2.5);
-  scene.add(accent_light);
-  const monitor_light = new THREE.PointLight(COLORS.coral, 4, 4, 1.8);
-  monitor_light.position.set(3.2, 2.4, -0.7);
+
+  // Cool spill from the night window.
+  const window_light = new THREE.DirectionalLight(0x9fc0e4, 0.55);
+  window_light.position.set(0.7, 3.6, -4.8);
+  window_light.target.position.set(0, 1.2, 1.5);
+  scene.add(window_light, window_light.target);
+
+  // The monitor's screen throws a faint teal wash onto the bed.
+  const monitor_light = new THREE.PointLight(COLORS.teal, 2.4, 4.5, 1.9);
+  monitor_light.position.set(3.05, 2.4, -1.1);
   scene.add(monitor_light);
 
   let disposed = false;
@@ -841,7 +1027,7 @@ export function initClinicalScene(container, on_select = () => {}) {
   const room = createClinicalRoom();
   scene.add(room);
   container.dataset.avatarReady = "loading";
-  const avatar_ready = loadPatientAvatar(DEFAULT_PATIENT_AVATAR_URL)
+  const avatar_ready = loadPatientAvatar(avatar_url)
     .then((patient) => {
       if (disposed) {
         disposeObject(patient);
@@ -1001,20 +1187,36 @@ export function findInteractiveData(object) {
 function createWindow() {
   const group = new THREE.Group();
   group.name = "room-window";
-  const glass_material = new THREE.MeshStandardMaterial({
-    color: 0x8ee6dc,
-    emissive: 0x4ebbb1,
-    emissiveIntensity: 0.28,
+  const night_texture = createNightSkyTexture();
+  const backdrop = new THREE.Mesh(
+    new THREE.PlaneGeometry(4.05, 2.2),
+    new THREE.MeshBasicMaterial({
+      map: night_texture,
+      color: night_texture ? 0xffffff : 0x1a2c42,
+    }),
+  );
+  backdrop.name = "window-view";
+  backdrop.position.set(0.7, 3.55, -4.97);
+  group.add(backdrop);
+  const glass_material = new THREE.MeshPhysicalMaterial({
+    color: 0xdfe9ec,
     transparent: true,
-    opacity: 0.33,
-    roughness: 0.18,
+    opacity: 0.12,
+    roughness: 0.05,
+    metalness: 0.1,
   });
   const frame_material = new THREE.MeshStandardMaterial({
-    color: COLORS.steel,
-    metalness: 0.55,
-    roughness: 0.35,
+    color: 0xaab0b5,
+    metalness: 0.6,
+    roughness: 0.32,
   });
-  group.add(createBox("window-glass", [4.05, 2.2, 0.06], glass_material, [0.7, 3.55, -4.84]));
+  group.add(createBox("window-glass", [4.05, 2.2, 0.03], glass_material, [0.7, 3.55, -4.84]));
+  group.add(createBox(
+    "window-sill",
+    [4.3, 0.07, 0.28],
+    new THREE.MeshStandardMaterial({ color: 0xe6e8e3, roughness: 0.4 }),
+    [0.7, 2.4, -4.78],
+  ));
   [-1.33, 2.73].forEach((x_position) => {
     group.add(createBox("window-frame", [0.08, 2.35, 0.12], frame_material, [x_position, 3.55, -4.75]));
   });
@@ -1028,13 +1230,18 @@ function createRail(x_position) {
   const group = new THREE.Group();
   group.name = "bed-rail";
   const rail_material = new THREE.MeshStandardMaterial({
-    color: COLORS.steel,
-    roughness: 0.3,
-    metalness: 0.72,
+    color: 0xe8ebed,
+    roughness: 0.22,
+    metalness: 0.85,
   });
-  group.add(createBox("rail-top", [0.07, 0.07, 2.95], rail_material, [x_position, 1.62, 0.15]));
+  const top_bar = createCylinder("rail-top", 0.032, 0.032, 2.95, rail_material, [x_position, 1.62, 0.15]);
+  top_bar.rotation.x = Math.PI / 2;
+  group.add(top_bar);
+  const mid_bar = createCylinder("rail-mid", 0.024, 0.024, 2.75, rail_material, [x_position, 1.47, 0.15]);
+  mid_bar.rotation.x = Math.PI / 2;
+  group.add(mid_bar);
   [-1.12, -0.38, 0.38, 1.12].forEach((z_position) => {
-    group.add(createCylinder("rail-post", 0.03, 0.03, 0.5, rail_material, [x_position, 1.37, z_position]));
+    group.add(createCylinder("rail-post", 0.024, 0.024, 0.5, rail_material, [x_position, 1.37, z_position]));
   });
   return group;
 }
@@ -1042,23 +1249,70 @@ function createRail(x_position) {
 function createIvPole() {
   const group = new THREE.Group();
   group.name = "iv-pole";
-  const metal = new THREE.MeshStandardMaterial({
-    color: COLORS.steel,
-    roughness: 0.26,
-    metalness: 0.76,
+  const chrome = new THREE.MeshStandardMaterial({
+    color: 0xe6e9eb,
+    roughness: 0.16,
+    metalness: 0.92,
   });
-  group.add(createCylinder("iv-stand", 0.035, 0.055, 2.78, metal, [-2.27, 1.44, -0.65]));
-  group.add(createBox("iv-hook", [0.66, 0.035, 0.035], metal, [-2.27, 2.85, -0.65]));
-  group.add(createBox("iv-base", [0.82, 0.06, 0.48], metal, [-2.27, 0.08, -0.65]));
+  group.add(createCylinder("iv-stand", 0.022, 0.03, 2.78, chrome, [-2.27, 1.44, -0.65]));
+  // Five-leg star base with casters.
+  [0, 1, 2, 3, 4].forEach((leg_index) => {
+    const angle = (leg_index / 5) * Math.PI * 2;
+    const leg = createBox("iv-base-leg", [0.4, 0.035, 0.05], chrome, [
+      -2.27 + Math.cos(angle) * 0.21,
+      0.06,
+      -0.65 + Math.sin(angle) * 0.21,
+    ]);
+    leg.rotation.y = -angle;
+    group.add(leg);
+  });
+  // Four-hook crown.
+  [0, Math.PI / 2].forEach((angle) => {
+    const hook_bar = createBox("iv-hook", [0.56, 0.022, 0.022], chrome, [-2.27, 2.85, -0.65]);
+    hook_bar.rotation.y = angle;
+    group.add(hook_bar);
+  });
+
   const bag_material = new THREE.MeshPhysicalMaterial({
-    color: 0xd4fff5,
+    color: 0xeef7f4,
     transparent: true,
-    opacity: 0.55,
-    roughness: 0.18,
-    transmission: 0.35,
+    opacity: 0.42,
+    roughness: 0.12,
+    transmission: 0.4,
   });
-  const bag = createBox("iv-bag", [0.34, 0.64, 0.12], bag_material, [-2.04, 2.46, -0.65]);
+  const bag = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.56, 0.1, 3, 0.05), bag_material);
+  bag.name = "iv-bag";
+  bag.position.set(-2.06, 2.5, -0.65);
   group.add(bag);
+  const fluid = new THREE.Mesh(
+    new RoundedBoxGeometry(0.26, 0.36, 0.07, 3, 0.035),
+    new THREE.MeshStandardMaterial({ color: 0xdff2ee, transparent: true, opacity: 0.85, roughness: 0.2 }),
+  );
+  fluid.name = "iv-fluid";
+  fluid.position.set(-2.06, 2.41, -0.65);
+  group.add(fluid);
+  const drip_chamber = createCylinder(
+    "iv-drip-chamber",
+    0.028,
+    0.028,
+    0.14,
+    bag_material,
+    [-2.06, 2.12, -0.65],
+  );
+  group.add(drip_chamber);
+  // IV line: a soft catenary from the drip chamber to the bed edge.
+  const line_curve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-2.06, 2.05, -0.65),
+    new THREE.Vector3(-1.85, 1.45, -0.6),
+    new THREE.Vector3(-1.45, 1.52, -0.55),
+    new THREE.Vector3(-1.05, 1.62, -0.52),
+  ]);
+  const iv_line = new THREE.Mesh(
+    new THREE.TubeGeometry(line_curve, 32, 0.008, 8),
+    new THREE.MeshStandardMaterial({ color: 0xf2f5f4, transparent: true, opacity: 0.85, roughness: 0.3 }),
+  );
+  iv_line.name = "iv-line";
+  group.add(iv_line);
   tagInteractive(group, "iv", "IV equipment");
   return group;
 }
@@ -1067,18 +1321,54 @@ function createCabinet() {
   const group = new THREE.Group();
   group.name = "bedside-cabinet";
   const body_material = new THREE.MeshStandardMaterial({
-    color: 0x2d5558,
-    roughness: 0.72,
+    color: COLORS.bed,
+    roughness: 0.44,
+    metalness: 0.03,
   });
   const top_material = new THREE.MeshStandardMaterial({
-    color: COLORS.bed,
-    roughness: 0.62,
+    color: 0xf0f1ee,
+    roughness: 0.3,
   });
-  group.add(createBox("cabinet-body", [1.25, 1.03, 0.94], body_material, [-3.35, 0.54, 1.22]));
-  group.add(createBox("cabinet-top", [1.36, 0.09, 1.04], top_material, [-3.35, 1.1, 1.22]));
+  const body = new THREE.Mesh(new RoundedBoxGeometry(1.25, 1.03, 0.94, 3, 0.03), body_material);
+  body.name = "cabinet-body";
+  body.position.set(-3.35, 0.54, 1.22);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  group.add(body);
+  group.add(createBox("cabinet-top", [1.36, 0.06, 1.04], top_material, [-3.35, 1.09, 1.22]));
+  const handle_material = new THREE.MeshStandardMaterial({ color: 0xb9bfc4, roughness: 0.25, metalness: 0.85 });
   [-0.14, 0.22].forEach((y_offset) => {
-    group.add(createBox("cabinet-drawer", [1.06, 0.24, 0.05], top_material, [-3.35, 0.74 + y_offset, 1.71]));
+    group.add(createBox("cabinet-drawer", [1.06, 0.28, 0.03], body_material, [-3.35, 0.72 + y_offset, 1.7]));
+    const handle = createCylinder("cabinet-handle", 0.012, 0.012, 0.34, handle_material, [-3.35, 0.72 + y_offset, 1.73]);
+    handle.rotation.z = Math.PI / 2;
+    group.add(handle);
   });
+  // The clinical chart: a clipboard resting on the cabinet.
+  const clipboard = new THREE.Mesh(
+    new RoundedBoxGeometry(0.42, 0.02, 0.58, 2, 0.01),
+    new THREE.MeshStandardMaterial({ color: 0x8a6f4d, roughness: 0.6 }),
+  );
+  clipboard.name = "chart-clipboard";
+  clipboard.position.set(-3.42, 1.13, 1.1);
+  clipboard.rotation.y = 0.35;
+  clipboard.castShadow = true;
+  group.add(clipboard);
+  const paper = createBox(
+    "chart-paper",
+    [0.36, 0.008, 0.5],
+    new THREE.MeshStandardMaterial({ color: 0xfbfbf7, roughness: 0.9 }),
+    [-3.42, 1.15, 1.1],
+  );
+  paper.rotation.y = 0.35;
+  group.add(paper);
+  const clip = createBox(
+    "chart-clip",
+    [0.14, 0.02, 0.05],
+    new THREE.MeshStandardMaterial({ color: 0xb9bfc4, roughness: 0.3, metalness: 0.8 }),
+    [-3.5, 1.16, 0.88],
+  );
+  clip.rotation.y = 0.35;
+  group.add(clip);
   tagInteractive(group, "chart", "Open clinical chart");
   return group;
 }
@@ -1086,60 +1376,173 @@ function createCabinet() {
 function createExamLamp() {
   const group = new THREE.Group();
   group.name = "exam-lamp";
-  const metal = new THREE.MeshStandardMaterial({
-    color: COLORS.steel,
-    roughness: 0.35,
-    metalness: 0.6,
+  const body_material = new THREE.MeshStandardMaterial({
+    color: 0xdfe3e6,
+    roughness: 0.34,
+    metalness: 0.5,
   });
-  group.add(createCylinder("lamp-pole", 0.04, 0.06, 2.1, metal, [4.35, 1.1, 1.7]));
-  const arm = createCylinder("lamp-arm", 0.035, 0.035, 1.25, metal, [4.0, 2.28, 1.42]);
+  const base = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.08, 0.62, 3, 0.03), body_material);
+  base.name = "lamp-base";
+  base.position.set(4.35, 0.04, 1.7);
+  base.castShadow = true;
+  group.add(base);
+  group.add(createCylinder("lamp-pole", 0.028, 0.038, 2.1, body_material, [4.35, 1.1, 1.7]));
+  const arm = createCylinder("lamp-arm", 0.024, 0.024, 1.25, body_material, [4.0, 2.28, 1.42]);
   arm.rotation.z = -0.95;
   group.add(arm);
   const shade = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.22, 0.38, 0.32, 24, 1, true),
-    new THREE.MeshStandardMaterial({ color: 0x31585a, roughness: 0.42 }),
+    new THREE.CylinderGeometry(0.2, 0.3, 0.24, 28, 1, true),
+    new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.4, metalness: 0.35, side: THREE.DoubleSide }),
   );
   shade.name = "exam-lamp-shade";
   shade.rotation.z = -0.72;
   shade.position.set(3.62, 2.75, 1.1);
+  shade.castShadow = true;
   group.add(shade);
+  const lamp_face = new THREE.Mesh(
+    new THREE.CircleGeometry(0.17, 24),
+    new THREE.MeshStandardMaterial({ color: 0xfff6e6, emissive: 0xffedc9, emissiveIntensity: 1.6 }),
+  );
+  lamp_face.name = "exam-lamp-face";
+  lamp_face.position.set(3.53, 2.66, 1.06);
+  lamp_face.lookAt(1.2, 1.4, -0.4);
+  group.add(lamp_face);
+  const lamp_light = new THREE.SpotLight(0xffe9c4, 14, 9, Math.PI / 6, 0.7, 1.4);
+  lamp_light.name = "exam-lamp-light";
+  lamp_light.position.set(3.53, 2.66, 1.06);
+  lamp_light.target.position.set(0.6, 1.4, -0.5);
+  group.add(lamp_light, lamp_light.target);
   return group;
 }
 
 function createPrivacyCurtain() {
   const group = new THREE.Group();
   group.name = "privacy-curtain";
-  const curtain_material = new THREE.MeshStandardMaterial({
-    color: 0x27595b,
-    roughness: 0.98,
+  const curtain_material = new THREE.MeshPhysicalMaterial({
+    color: 0xc6d4c4,
+    roughness: 0.96,
+    sheen: 0.4,
+    sheenRoughness: 0.9,
+    sheenColor: new THREE.Color(0xffffff),
     side: THREE.DoubleSide,
   });
-  const curtain = createBox("curtain-fabric", [0.08, 3.35, 4.3], curtain_material, [-5.45, 2.15, 1.9]);
-  group.add(curtain);
-  const rail_material = new THREE.MeshStandardMaterial({
-    color: COLORS.steel,
-    metalness: 0.65,
-    roughness: 0.28,
+  // Pleated fabric: a segmented plane displaced by overlapping sine folds.
+  const curtain_geometry = new THREE.PlaneGeometry(4.3, 3.3, 64, 8);
+  const positions = curtain_geometry.attributes.position;
+  const vertex = new THREE.Vector3();
+  Array.from({ length: positions.count }, (_, index) => index).forEach((index) => {
+    vertex.fromBufferAttribute(positions, index);
+    const fold = Math.sin(vertex.x * 5.2) * 0.075 + Math.sin(vertex.x * 11.7 + 1.4) * 0.03;
+    const hang = 1 - ((vertex.y + 1.65) / 3.3) * 0.35;
+    positions.setZ(index, fold * hang);
   });
-  group.add(createBox("curtain-rail", [0.1, 0.1, 4.55], rail_material, [-5.45, 4.03, 1.9]));
+  curtain_geometry.computeVertexNormals();
+  const curtain = new THREE.Mesh(curtain_geometry, curtain_material);
+  curtain.name = "curtain-fabric";
+  curtain.rotation.y = Math.PI / 2;
+  curtain.position.set(-5.45, 2.25, 1.9);
+  curtain.castShadow = true;
+  curtain.receiveShadow = true;
+  group.add(curtain);
+
+  const rail_material = new THREE.MeshStandardMaterial({
+    color: 0xcdd2d6,
+    metalness: 0.75,
+    roughness: 0.25,
+  });
+  const track = createCylinder("curtain-rail", 0.025, 0.025, 4.55, rail_material, [-5.45, 3.95, 1.9]);
+  track.rotation.x = Math.PI / 2;
+  group.add(track);
+  [-1.8, -1.2, -0.6, 0, 0.6, 1.2, 1.8].forEach((z_offset) => {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 8, 16), rail_material);
+    ring.name = "curtain-ring";
+    ring.position.set(-5.45, 3.93, 1.9 + z_offset);
+    ring.rotation.y = Math.PI / 2;
+    group.add(ring);
+  });
   return group;
 }
 
 function createWallDetails() {
   const group = new THREE.Group();
   group.name = "wall-details";
-  const panel_material = new THREE.MeshStandardMaterial({
-    color: 0x214348,
-    roughness: 0.62,
+  const plate_material = new THREE.MeshStandardMaterial({
+    color: 0xeceeea,
+    roughness: 0.4,
   });
   const light_material = new THREE.MeshStandardMaterial({
     color: COLORS.mint,
     emissive: COLORS.teal,
-    emissiveIntensity: 0.7,
+    emissiveIntensity: 0.9,
   });
-  group.add(createBox("room-number", [1.18, 0.43, 0.08], panel_material, [4.63, 3.98, -4.82]));
-  group.add(createBox("call-light", [0.18, 0.18, 0.08], light_material, [5.03, 3.98, -4.71]));
-  group.add(createBox("wall-rail", [5.4, 0.1, 0.13], panel_material, [-2.85, 2.04, -4.79]));
+  group.add(createBox("room-number", [0.72, 0.28, 0.04], plate_material, [4.63, 3.98, -4.94]));
+  group.add(createBox("call-light", [0.14, 0.14, 0.05], light_material, [5.13, 3.98, -4.93]));
+  group.add(createBox(
+    "wall-rail",
+    [5.4, 0.09, 0.09],
+    new THREE.MeshStandardMaterial({ color: 0x9ba19b, roughness: 0.5 }),
+    [-2.85, 1.14, -4.86],
+  ));
+
+  // Wall clock over the door side.
+  const clock = new THREE.Group();
+  clock.name = "wall-clock";
+  const clock_face = createCylinder("clock-face", 0.3, 0.3, 0.05, plate_material, [0, 0, 0]);
+  clock_face.rotation.z = Math.PI / 2;
+  clock.add(clock_face);
+  const hand_material = new THREE.MeshStandardMaterial({ color: 0x2e3338, roughness: 0.5 });
+  const minute_hand = createBox("clock-hand", [0.012, 0.22, 0.012], hand_material, [0.035, 0.05, 0]);
+  clock.add(minute_hand);
+  const hour_hand = createBox("clock-hand", [0.012, 0.14, 0.012], hand_material, [0.035, 0.02, 0]);
+  hour_hand.rotation.z = 1.1;
+  clock.add(hour_hand);
+  clock.rotation.z = Math.PI / 2;
+  clock.rotation.y = Math.PI / 2;
+  clock.position.set(-5.92, 3.9, -2.2);
+  group.add(clock);
+
+  // Whiteboard with care notes near the foot of the bed.
+  const whiteboard = new THREE.Group();
+  whiteboard.name = "whiteboard";
+  whiteboard.add(createBox("whiteboard-face", [1.5, 1.0, 0.04], new THREE.MeshStandardMaterial({ color: 0xf7f8f5, roughness: 0.2 }), [0, 0, 0]));
+  whiteboard.add(createBox("whiteboard-frame", [1.58, 1.08, 0.03], new THREE.MeshStandardMaterial({ color: 0xb9bfc4, roughness: 0.3, metalness: 0.7 }), [0, 0, -0.012]));
+  [0.3, 0.14, -0.02, -0.18].forEach((y_offset, index) => {
+    whiteboard.add(createBox(
+      "whiteboard-line",
+      [0.6 + (index % 2) * 0.4, 0.016, 0.005],
+      new THREE.MeshStandardMaterial({ color: index === 0 ? 0x3563a8 : 0x565c62, roughness: 0.6 }),
+      [-0.28 + (index % 2) * 0.15, y_offset, 0.025],
+    ));
+  });
+  whiteboard.rotation.y = Math.PI / 2;
+  whiteboard.position.set(-5.9, 2.6, 2.7);
+  group.add(whiteboard);
+
+  // Door on the left wall.
+  const door = new THREE.Group();
+  door.name = "room-door";
+  const door_leaf = new THREE.Mesh(
+    new RoundedBoxGeometry(1.35, 2.6, 0.09, 2, 0.02),
+    new THREE.MeshStandardMaterial({ color: 0xcfc4ae, roughness: 0.42 }),
+  );
+  door_leaf.castShadow = true;
+  door.add(door_leaf);
+  door.add(createBox("door-window", [0.34, 0.62, 0.1], new THREE.MeshStandardMaterial({ color: 0x39424a, roughness: 0.1, metalness: 0.2 }), [0.28, 0.72, 0]));
+  const door_handle = createCylinder("door-handle", 0.02, 0.02, 0.3, new THREE.MeshStandardMaterial({ color: 0xb9bfc4, roughness: 0.25, metalness: 0.85 }), [-0.52, -0.05, 0.09]);
+  door_handle.rotation.x = Math.PI / 2;
+  door.add(door_handle);
+  door.add(createBox("door-frame", [1.5, 2.74, 0.06], new THREE.MeshStandardMaterial({ color: 0x9ba19b, roughness: 0.55 }), [0, 0.03, -0.04]));
+  door.rotation.y = Math.PI / 2;
+  door.position.set(-5.9, 1.34, -2.2);
+  group.add(door);
+
+  // Recessed ceiling light panel (the RectAreaLight in init matches it).
+  group.add(createBox(
+    "ceiling-light-panel",
+    [2.6, 0.04, 1.3],
+    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xf4f7f0, emissiveIntensity: 1.35 }),
+    [0.4, 5.46, -0.4],
+  ));
   return group;
 }
 

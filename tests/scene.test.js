@@ -229,7 +229,10 @@ test("createClinicalRoom composes the complete named clinical room", () => {
     "floor",
     "back-wall",
     "left-wall",
-    "floor-grid",
+    "ceiling",
+    "headwall-accent",
+    "skirting",
+    "skirting",
     "room-window",
     "patient-bed",
     "patient-bed-cover",
@@ -252,7 +255,13 @@ test("createClinicalRoom composes the complete named clinical room", () => {
     assert.ok(room.getObjectByName(name) instanceof THREE.Object3D, `${name} is present`);
   });
   assert.equal(room.getObjectByName("floor").receiveShadow, true);
-  assert.ok(room.getObjectByName("floor-grid") instanceof THREE.GridHelper);
+  assert.equal(room.getObjectByName("floor-grid"), undefined, "the stylized floor grid is gone");
+  assert.ok(room.getObjectByName("ceiling") instanceof THREE.Mesh);
+  assert.ok(room.getObjectByName("room-door") instanceof THREE.Object3D);
+  assert.ok(room.getObjectByName("wall-clock") instanceof THREE.Object3D);
+  assert.ok(room.getObjectByName("whiteboard") instanceof THREE.Object3D);
+  assert.ok(room.getObjectByName("chart-clipboard") instanceof THREE.Mesh);
+  assert.ok(room.getObjectByName("ceiling-light-panel") instanceof THREE.Mesh);
   const blanket = room.getObjectByName("patient-blanket");
   const blanket_depths = Array.from(blanket.geometry.attributes.position.array)
     .filter((value, index) => index % 3 === 2);
@@ -699,25 +708,69 @@ test("loadPatientAvatar validates URL, loader, and loaded scene", async () => {
   await Promise.all(
     [null, {}, { scene: {} }].map((gltf) => {
       return assert.rejects(
-        loadPatientAvatar("/avatar.glb", { loadAsync: async () => gltf }),
+        loadPatientAvatar("/avatar.glb", { loadAsync: async () => gltf }, { attempts: 1 }),
         /avatar GLB did not contain a valid scene/,
       );
     }),
   );
 });
 
-test("loadPatientAvatar propagates loader failures unchanged", async () => {
-  const loader_error = new Error("synthetic network failure");
+test("loadPatientAvatar validates its retry options", async () => {
+  const valid_loader = { loadAsync: async () => ({ scene: new THREE.Group() }) };
+  await Promise.all(
+    [0, -1, 1.5, "3", Number.NaN].map((attempts) => {
+      return assert.rejects(
+        loadPatientAvatar("/avatar.glb", valid_loader, { attempts }),
+        /attempts must be an integer of at least 1/,
+      );
+    }),
+  );
+  await Promise.all(
+    [-1, Number.NaN, Number.POSITIVE_INFINITY, "0"].map((retry_delay_ms) => {
+      return assert.rejects(
+        loadPatientAvatar("/avatar.glb", valid_loader, { retry_delay_ms }),
+        /retry_delay_ms must be a non-negative finite number/,
+      );
+    }),
+  );
+});
+
+test("loadPatientAvatar retries a transient failure and then succeeds", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
+  const synthetic = createSyntheticAvatar();
+  let call_count = 0;
   const loader = {
     loadAsync: async () => {
+      call_count += 1;
+      if (call_count === 1) {
+        throw new Error("synthetic transient failure");
+      }
+      return { scene: synthetic.model };
+    },
+  };
+
+  const patient = await loadPatientAvatar("/avatar.glb", loader, { retry_delay_ms: 1 });
+  assert.equal(call_count, 2, "the loader should be retried exactly once after one failure");
+  assert.ok(patient.getObjectByName("patient-avatar-model"));
+  assert.equal(patient.userData.avatar_source, "Rohy AvatarSDK full-body GLB");
+});
+
+test("loadPatientAvatar exhausts its attempts and propagates the final failure", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
+  const loader_error = new Error("synthetic network failure");
+  let call_count = 0;
+  const loader = {
+    loadAsync: async () => {
+      call_count += 1;
       throw loader_error;
     },
   };
 
   await assert.rejects(
-    loadPatientAvatar("/avatar.glb", loader),
+    loadPatientAvatar("/avatar.glb", loader, { attempts: 3, retry_delay_ms: 1 }),
     (error) => error === loader_error,
   );
+  assert.equal(call_count, 3, "every configured attempt should be used before failing");
 });
 
 test("createMonitor builds a tagged monitor with LED and waveform references", () => {
@@ -757,7 +810,8 @@ test("createOxygenStation builds the cylinder, wall panel, and three ports", () 
   assert.equal(ports.length, 3);
   assert.deepEqual(
     ports.map((port) => port.material.color.getHex()),
-    [0x32d9bd, 0xffb84a, 0x8ba3a5],
+    [0xffffff, 0x3a7d52, 0x555a5f],
+    "gas outlets stay color-coded: oxygen white, air green, vacuum gray",
   );
 });
 

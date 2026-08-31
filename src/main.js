@@ -7,9 +7,101 @@ import {
   deriveObjectives,
   derivePatientStatus,
   deriveVitals,
+  deriveVitalTrends,
   groupActions,
   tickSimulation,
+  validateVitals,
 } from "./simulation.js";
+import {
+  beepFrequencyForSpo2,
+  buildRecordsMarkup,
+  buildTreatmentsMarkup,
+  buildTrendsMarkup,
+  createWavePath,
+  formatElapsed,
+  getStatusCopy,
+  sampleTrendRows,
+  vitalSeverity,
+} from "./ui-helpers.js";
+
+export const DEFAULT_PATIENT = Object.freeze({
+  name: "Daniel Moreau",
+  initials: "DM",
+  age: 54,
+  pronouns: "he/him",
+  speaker: "DANIEL",
+  presenting_concern: "Increasing shortness of breath",
+  background: "Obstructive airways disease",
+  allergies: "No known drug allergy",
+  location: "Acute care · Room 04",
+  bed_label: "BED 04",
+  case_title: "Breathless at rest",
+  arrival_note: "Patient arrived in respiratory distress.",
+  opening_line: "I can't seem to catch my breath… it's much worse today.",
+});
+
+// Bound-mode base record: neutral placeholders only. The demo Daniel record
+// must never leak into a host-driven room — a fabricated complaint, history,
+// or allergy status shown next to real vitals would read as clinical fact.
+export const NEUTRAL_PATIENT = Object.freeze({
+  name: "—",
+  initials: "—",
+  age: "—",
+  pronouns: "they/them",
+  speaker: "PATIENT",
+  presenting_concern: "—",
+  background: "—",
+  allergies: "—",
+  location: "Live case",
+  bed_label: "LIVE",
+  case_title: "Patient room",
+  arrival_note: "Live monitoring connected.",
+  opening_line: "",
+});
+
+const PATIENT_STATUSES = Object.freeze(["critical", "unstable", "stabilizing", "stable"]);
+
+/**
+ * Create a bedside audio engine driven by Web Audio.
+ * The pulse beep tracks heart rate and its pitch falls with desaturation.
+ * @return {{enable: () => void, setMuted: (muted: boolean) => void, beat: (vitals: {heart_rate: number, oxygen_saturation: number}) => void}}
+ *   Monitor audio controller.
+ * @example
+ * const audio = createMonitorAudio();
+ */
+export function createMonitorAudio() {
+  let context = null;
+  let muted = false;
+
+  return {
+    enable() {
+      if (context || typeof window === "undefined") return;
+      const AudioContextClass = window.AudioContext ?? window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      context = new AudioContextClass();
+    },
+    setMuted(next_muted) {
+      muted = Boolean(next_muted);
+    },
+    beat(vitals) {
+      if (!context || muted || !Number.isFinite(vitals?.oxygen_saturation)) return;
+      if (context.state === "suspended") {
+        context.resume().catch(() => undefined);
+        return;
+      }
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.value = beepFrequencyForSpo2(vitals.oxygen_saturation);
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.035, context.currentTime + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.09);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.1);
+    },
+  };
+}
 
 const PATIENT_REPLIES = Object.freeze({
   introduce: "It feels tight… I can't get enough air.",
@@ -32,100 +124,6 @@ const SELECTION_ACTIONS = Object.freeze({
   iv: { category: "treat", action_id: "fluid_bolus" },
   chart: { category: "investigate", action_id: "check_chart" },
 });
-
-/**
- * Format elapsed seconds as MM:SS.
- * @param {number} seconds Elapsed seconds.
- * @return {string} Clock string.
- * @example
- * formatElapsed(65);
- */
-export function formatElapsed(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) {
-    throw new Error("seconds must be a non-negative finite number.");
-  }
-  const rounded_seconds = Math.floor(seconds);
-  return `${String(Math.floor(rounded_seconds / 60)).padStart(2, "0")}:${String(rounded_seconds % 60).padStart(2, "0")}`;
-}
-
-/**
- * Determine display severity for one vital sign.
- * @param {string} vital_name Supported vital key.
- * @param {number} value Vital value.
- * @return {"normal"|"warning"|"critical"} Severity class.
- * @example
- * vitalSeverity("oxygen_saturation", 86);
- */
-export function vitalSeverity(vital_name, value) {
-  if (typeof vital_name !== "string" || !Number.isFinite(value)) {
-    throw new Error("vital_name must be a string and value must be numeric.");
-  }
-  const thresholds = {
-    heart_rate: value > 120 || value < 45 ? "critical" : value > 100 ? "warning" : "normal",
-    oxygen_saturation: value < 88 ? "critical" : value < 94 ? "warning" : "normal",
-    respiratory_rate: value > 30 || value < 8 ? "critical" : value > 22 ? "warning" : "normal",
-    blood_pressure: value > 180 || value < 85 ? "critical" : value > 145 ? "warning" : "normal",
-    temperature: value > 39 || value < 35 ? "critical" : value > 37.5 ? "warning" : "normal",
-  };
-  if (!(vital_name in thresholds)) {
-    throw new Error(`Unknown vital name: ${vital_name}`);
-  }
-  return thresholds[vital_name];
-}
-
-/**
- * Build a responsive SVG ECG-style path.
- * @param {number} heart_rate Current heart rate.
- * @param {number} width SVG width.
- * @param {number} height SVG height.
- * @param {number} phase Animation phase.
- * @return {string} SVG path data.
- * @example
- * createWavePath(116, 640, 96, 0);
- */
-export function createWavePath(heart_rate, width, height, phase) {
-  if (![heart_rate, width, height, phase].every(Number.isFinite) || heart_rate <= 0 || width <= 0 || height <= 0) {
-    throw new Error("waveform inputs must be positive finite dimensions and heart rate.");
-  }
-  const baseline = height * 0.58;
-  const beat_width = Math.max(34, 80 - (heart_rate - 60) * 0.25);
-  const point_count = Math.ceil(width / 3) + 1;
-  const points = Array.from({ length: point_count }, (_, index) => {
-    const x_position = index * 3;
-    const cycle_position = (x_position + phase * 30) % beat_width;
-    const normalized_position = cycle_position / beat_width;
-    let pulse = Math.sin(x_position * 0.06) * 1.4;
-    if (normalized_position > 0.08 && normalized_position < 0.14) pulse -= height * 0.08;
-    if (normalized_position >= 0.14 && normalized_position < 0.18) pulse += height * 0.22;
-    if (normalized_position >= 0.18 && normalized_position < 0.23) pulse -= height * 0.48;
-    if (normalized_position >= 0.23 && normalized_position < 0.29) pulse += height * 0.12;
-    if (normalized_position >= 0.48 && normalized_position < 0.7) {
-      pulse -= Math.sin(((normalized_position - 0.48) / 0.22) * Math.PI) * height * 0.08;
-    }
-    return `${index === 0 ? "M" : "L"}${x_position.toFixed(1)},${(baseline + pulse).toFixed(1)}`;
-  });
-  return points.join(" ");
-}
-
-/**
- * Return a concise status message for the patient.
- * @param {string} status Current status.
- * @return {string} Status explanation.
- * @example
- * getStatusCopy("critical");
- */
-export function getStatusCopy(status) {
-  const messages = {
-    critical: "Immediate support required",
-    unstable: "Response remains time-sensitive",
-    stabilizing: "Physiology is responding",
-    stable: "Immediate threat controlled",
-  };
-  if (!messages[status]) {
-    throw new Error(`Unknown patient status: ${status}`);
-  }
-  return messages[status];
-}
 
 /**
  * Render a small inline UI icon.
@@ -163,11 +161,19 @@ export function uiIcon(name) {
 /**
  * Build the application shell markup.
  * @param {ReturnType<typeof groupActions>} grouped_actions Action groups.
+ * @param {typeof DEFAULT_PATIENT} [patient] Patient identity shown in the panels.
+ * @param {"standalone"|"bound"} [mode] "bound" omits the built-in scenario chrome
+ *   (brief, objectives, action dock, score, pause) because the host drives the case.
+ * @param {"internal"|"host"} [waveform] "host" renders an empty ECG canvas the
+ *   host application draws its own signal into, instead of the built-in SVG wave.
+ * @param {{records?: boolean, treatments?: boolean}} [features] Which host-fed
+ *   panels (medical records, treatment ordering) to render entry points for.
  * @return {string} HTML markup.
  * @example
  * buildAppMarkup(groupActions());
  */
-export function buildAppMarkup(grouped_actions) {
+export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode = "standalone", waveform = "internal", features = {}) {
+  const bound = mode === "bound";
   const action_markup = Object.entries(grouped_actions)
     .map(([category, actions]) => {
       const buttons = actions
@@ -186,7 +192,7 @@ export function buildAppMarkup(grouped_actions) {
     .join("");
 
   return `
-    <main class="simulator" data-status="critical">
+    <main class="simulator${bound ? " simulator--bound" : ""}" data-status="critical">
       <section class="stage" aria-label="3D patient room">
         <div class="stage__canvas" id="scene-root"></div>
         <div class="stage__wash" aria-hidden="true"></div>
@@ -195,15 +201,18 @@ export function buildAppMarkup(grouped_actions) {
           <strong>3D view unavailable</strong>
           <p>The clinical controls remain available in dashboard mode.</p>
         </div>
+        <div class="avatar-notice" id="avatar-notice" hidden role="status">
+          ${uiIcon("alert")} Reduced visuals · the full patient model could not load
+        </div>
 
         <header class="topbar">
-          <a class="brand" href="#" aria-label="Rohy home">
+          <span class="brand" aria-label="Rohy lab">
             <span class="brand__mark"><i></i><i></i><i></i></span>
             <span>rohy<sup>lab</sup></span>
-          </a>
+          </span>
           <div class="case-heading">
-            <span class="eyebrow">Acute care · Room 04</span>
-            <h1>Breathless at rest</h1>
+            <span class="eyebrow">${patient.location}</span>
+            <h1>${patient.case_title}</h1>
           </div>
           <div class="topbar__status">
             <div class="status-chip status-chip--critical" id="status-chip">
@@ -213,42 +222,44 @@ export function buildAppMarkup(grouped_actions) {
               <small>CASE TIME</small><strong id="case-time">00:00</strong>
             </div>
             <div class="topbar__actions">
-              <button class="icon-button" id="pause-button" type="button" aria-label="Pause simulation">${uiIcon("pause")}</button>
+              ${bound ? "" : `<button class="icon-button" id="pause-button" type="button" aria-label="Pause simulation">${uiIcon("pause")}</button>
               <button class="icon-button" id="sound-button" type="button" aria-label="Mute sounds" aria-pressed="false">${uiIcon("volume")}</button>
-              <button class="icon-button" id="dashboard-button" type="button" aria-label="Toggle simplified dashboard" aria-pressed="false">${uiIcon("grid")}</button>
+              <button class="icon-button" id="dashboard-button" type="button" aria-label="Toggle simplified dashboard" aria-pressed="false">${uiIcon("grid")}</button>`}
               <button class="icon-button" id="settings-button" type="button" aria-label="Toggle high contrast" aria-pressed="false">${uiIcon("settings")}</button>
             </div>
           </div>
         </header>
 
-        <aside class="patient-panel glass-panel">
+        ${bound ? "" : `<aside class="patient-panel glass-panel">
           <div class="panel-kicker"><span>PATIENT</span><b id="patient-state-dot">● HIGH ACUITY</b></div>
           <div class="patient-identity">
-            <div class="patient-avatar-mini">DM</div>
-            <div><h2>Daniel Moreau</h2><p>54 years · he/him</p></div>
+            <div class="patient-avatar-mini">${patient.initials}</div>
+            <div><h2>${patient.name}</h2><p>${patient.age} years · ${patient.pronouns}</p></div>
           </div>
           <dl class="patient-meta">
-            <div><dt>Presenting concern</dt><dd>Increasing shortness of breath</dd></div>
-            <div><dt>Background</dt><dd>Obstructive airways disease</dd></div>
-            <div><dt>Allergies</dt><dd>No known drug allergy</dd></div>
+            <div><dt>Presenting concern</dt><dd>${patient.presenting_concern}</dd></div>
+            <div><dt>Background</dt><dd>${patient.background}</dd></div>
+            <div><dt>Allergies</dt><dd>${patient.allergies}</dd></div>
           </dl>
           <div class="objective-heading"><span>Priority objectives</span><strong id="objective-count">0 / 4</strong></div>
           <div class="objective-list" id="objective-list"></div>
           <button class="text-button" id="brief-button" type="button">View scenario brief <span>↗</span></button>
-        </aside>
+        </aside>`}
 
         <aside class="monitor-panel glass-panel" aria-label="Live vital signs">
           <div class="monitor-header">
             <div><span class="live-dot"></span><strong>LIVE MONITOR</strong></div>
-            <span>BED 04</span>
+            <span>${patient.bed_label}</span>
           </div>
           <div class="ecg-block">
             <div class="ecg-label"><span>ECG · LEAD II</span><b id="rhythm-label">Sinus tachycardia</b></div>
-            <svg class="ecg" viewBox="0 0 640 96" preserveAspectRatio="none" role="img" aria-label="Animated ECG waveform">
+            ${waveform === "host"
+              ? `<canvas class="ecg ecg--host" id="ecg-canvas" width="640" height="96" role="img" aria-label="Live ECG waveform"></canvas>`
+              : `<svg class="ecg" viewBox="0 0 640 96" preserveAspectRatio="none" role="img" aria-label="Animated ECG waveform">
               <defs><linearGradient id="wave-glow" x1="0" x2="1"><stop stop-color="#2ae0bd"/><stop offset="1" stop-color="#9ff9df"/></linearGradient></defs>
               <path class="ecg-grid" d="M0 24H640M0 48H640M0 72H640 M40 0V96M80 0V96M120 0V96M160 0V96M200 0V96M240 0V96M280 0V96M320 0V96M360 0V96M400 0V96M440 0V96M480 0V96M520 0V96M560 0V96M600 0V96"/>
               <path id="ecg-path" class="ecg-wave" d=""/>
-            </svg>
+            </svg>`}
           </div>
           <div class="vital-grid">
             <div class="vital" id="vital-heart_rate"><span>HR</span><strong data-vital-value>116</strong><small>bpm</small><i>${uiIcon("heart")}</i></div>
@@ -257,11 +268,18 @@ export function buildAppMarkup(grouped_actions) {
             <div class="vital" id="vital-blood_pressure"><span>NIBP</span><strong data-vital-value>168/94</strong><small>mmHg</small><i>SYS/DIA</i></div>
             <div class="vital vital--wide" id="vital-temperature"><span>TEMP</span><strong data-vital-value>37.8</strong><small>°C</small><i>ORAL</i></div>
           </div>
-          <div class="monitor-footer"><span id="last-reading">Last reading · now</span><button type="button" id="trend-button">View trends</button></div>
+          <div class="monitor-footer">
+            <span id="last-reading">Last reading · now</span>
+            <span class="monitor-footer__actions">
+              ${features.records ? `<button type="button" id="records-button">Records</button>` : ""}
+              ${features.treatments ? `<button type="button" id="treatments-button">Treatments</button>` : ""}
+              <button type="button" id="trend-button">View trends</button>
+            </span>
+          </div>
         </aside>
 
-        <div class="scene-label scene-label--patient"><i></i><span>DANIEL · PATIENT</span></div>
-        <div class="scene-label scene-label--monitor"><i></i><span>MONITOR</span></div>
+        ${bound ? "" : `<div class="scene-label scene-label--patient"><i></i><span>${patient.speaker} · PATIENT</span></div>
+        <div class="scene-label scene-label--monitor"><i></i><span>MONITOR</span></div>`}
         <div class="selection-toast" id="selection-toast" hidden></div>
 
         <div class="camera-controls" aria-label="Camera views">
@@ -273,18 +291,19 @@ export function buildAppMarkup(grouped_actions) {
           <button class="camera-button" data-camera="equipment" type="button"><kbd>5</kbd> Equipment</button>
         </div>
 
-        <div class="patient-caption" id="patient-caption">
-          <span class="caption-speaker">DANIEL</span>
-          <p>“I can't seem to catch my breath… it's much worse today.”</p>
+        <div class="patient-caption" id="patient-caption"${bound ? " hidden" : ""}>
+          <span class="caption-speaker">${patient.speaker}</span>
+          <p>“${patient.opening_line}”</p>
         </div>
 
-        <section class="activity-panel glass-panel" aria-label="Clinical timeline">
+        ${bound ? "" : `<section class="activity-panel glass-panel" aria-label="Clinical timeline">
           <div class="activity-heading"><span>CLINICAL TIMELINE</span><button id="timeline-button" type="button">Expand</button></div>
           <div id="timeline-list" class="timeline-list">
-            <article><time>00:00</time><i></i><p>Patient arrived in respiratory distress.</p></article>
+            <article><time>00:00</time><i></i><p>${patient.arrival_note}</p></article>
           </div>
-        </section>
+        </section>`}
 
+        ${bound ? "" : `
         <section class="action-dock glass-panel" aria-label="Clinical actions">
           <div class="action-dock__top">
             <div class="action-tabs" role="tablist" aria-label="Action category">
@@ -296,22 +315,23 @@ export function buildAppMarkup(grouped_actions) {
           </div>
           <div class="action-lists">${action_markup}</div>
           <p class="prototype-note">Training prototype · not clinical guidance</p>
-        </section>
+        </section>`}
 
         <div class="sr-only" id="live-region" aria-live="polite" aria-atomic="true"></div>
       </section>
 
+      ${bound ? "" : `
       <div class="modal-layer" id="brief-modal" role="dialog" aria-modal="true" aria-labelledby="brief-title">
         <article class="brief-card">
           <div class="brief-card__visual">
             <span class="brief-tag">INTERACTIVE 3D CASE</span>
             <div class="brief-orbit" aria-hidden="true"><i></i><i></i><i></i><span>${uiIcon("lungs")}</span></div>
-            <div class="brief-patient"><strong>DM</strong><span>54</span></div>
+            <div class="brief-patient"><strong>${patient.initials}</strong><span>${patient.age}</span></div>
           </div>
           <div class="brief-card__content">
             <span class="eyebrow">Rohy clinical simulation · Case 01</span>
-            <h2 id="brief-title">Breathless<br/>at rest</h2>
-            <p>Daniel Moreau, 54, has become acutely short of breath. Enter the room, assess his condition, and respond to changing physiology.</p>
+            <h2 id="brief-title">${patient.case_title}</h2>
+            <p>${patient.name}, ${patient.age}, has become acutely short of breath. Enter the room, assess his condition, and respond to changing physiology.</p>
             <div class="brief-goals">
               <div><span>01</span><p><strong>Assess</strong>Identify the immediate threat.</p></div>
               <div><span>02</span><p><strong>Stabilize</strong>Choose time-critical actions.</p></div>
@@ -327,56 +347,171 @@ export function buildAppMarkup(grouped_actions) {
         <article class="result-card">
           <div class="result-icon">${uiIcon("check")}</div>
           <span class="eyebrow">Scenario checkpoint reached</span>
-          <h2 id="result-title">Daniel is stabilizing.</h2>
+          <h2 id="result-title">${patient.name.split(" ")[0]} is stabilizing.</h2>
           <p>You assessed the immediate problem, supported oxygenation, began targeted treatment, and escalated care.</p>
           <div class="result-stats"><div><span>Score</span><strong id="result-score">000</strong></div><div><span>Time</span><strong id="result-time">00:00</strong></div><div><span>Actions</span><strong id="result-actions">0</strong></div></div>
           <button class="begin-button" id="continue-button" type="button">Continue in room ${uiIcon("arrow")}</button>
           <button class="result-secondary" id="restart-button" type="button">Restart scenario</button>
         </article>
+      </div>`}
+
+      <div class="modal-layer modal-layer--trends" id="trends-modal" role="dialog" aria-modal="true" aria-labelledby="trends-title" hidden>
+        <article class="trends-card">
+          <div class="trends-card__header">
+            <div>
+              <span class="eyebrow">${patient.bed_label} · Case trends</span>
+              <h2 id="trends-title">Vital sign trends</h2>
+            </div>
+            <button class="icon-button" id="trends-close" type="button" aria-label="Close trends">✕</button>
+          </div>
+          <div id="trends-body" class="trends-body"></div>
+          <p class="trends-note">${bound ? "Recorded from the live monitor feed." : "Reconstructed from the clinical timeline of this case."}</p>
+        </article>
       </div>
+
+      ${features.records ? `
+      <div class="modal-layer modal-layer--trends" id="records-modal" role="dialog" aria-modal="true" aria-labelledby="records-title" hidden>
+        <article class="trends-card records-card">
+          <div class="trends-card__header">
+            <div>
+              <span class="eyebrow">${patient.name} · Clinical record</span>
+              <h2 id="records-title">Medical records</h2>
+            </div>
+            <button class="icon-button" id="records-close" type="button" aria-label="Close records">✕</button>
+          </div>
+          <div id="records-body" class="records-body"></div>
+        </article>
+      </div>` : ""}
+
+      ${features.treatments ? `
+      <div class="modal-layer modal-layer--trends" id="treatments-modal" role="dialog" aria-modal="true" aria-labelledby="treatments-title" hidden>
+        <article class="trends-card records-card">
+          <div class="trends-card__header">
+            <div>
+              <span class="eyebrow">${patient.bed_label} · Orders</span>
+              <h2 id="treatments-title">Treatment</h2>
+            </div>
+            <button class="icon-button" id="treatments-close" type="button" aria-label="Close treatments">✕</button>
+          </div>
+          <div id="treatments-body" class="records-body"></div>
+        </article>
+      </div>` : ""}
     </main>`;
 }
 
 /**
- * Initialize the interactive Rohy patient-room application.
- * @return {void}
+ * Mount the interactive patient room into a container element.
+ *
+ * Standalone mode (default) runs the built-in deterministic scenario engine.
+ * Bound mode renders the same room, monitor, timeline, and patient rig, but the
+ * host application owns the case: it supplies the patient record up front and
+ * then streams vitals with `controller.update()` and events with
+ * `controller.addTimelineEvent()`; the built-in scenario chrome (brief,
+ * objectives, action dock, score, pause) is omitted.
+ *
+ * @param {Element} container Element that will own the room DOM.
+ * @param {{
+ *   patient?: Partial<typeof DEFAULT_PATIENT>,
+ *   avatar_url?: string,
+ *   mode?: "standalone"|"bound",
+ *   on_event?: (event: object) => void,
+ * }} [options] Mount configuration.
+ * @return {{
+ *   dispose: () => void,
+ *   update: (vitals: object, status: string|null, elapsed_seconds: number) => void,
+ *   addTimelineEvent: (message: string, type?: string, time?: number) => void,
+ *   say: (line: string) => void,
+ *   applyAction: (action_id: string) => void,
+ *   focusPreset: (name: string) => void,
+ *   getState: () => object,
+ * }} Room controller.
  * @example
- * boot();
+ * const room = mountPatientRoom(document.querySelector("#app"));
  */
-export function boot() {
-  const app = document.querySelector("#app");
-  if (!app) {
-    throw new Error("#app root was not found.");
+export function mountPatientRoom(container, options = {}) {
+  if (!container || typeof container.querySelector !== "function") {
+    throw new Error("container must be a DOM element.");
   }
-  app.innerHTML = buildAppMarkup(groupActions());
+  const mode = options.mode ?? "standalone";
+  if (!["standalone", "bound"].includes(mode)) {
+    throw new Error(`Unknown mount mode: ${mode}`);
+  }
+  const waveform = options.waveform ?? "internal";
+  if (!["internal", "host"].includes(waveform)) {
+    throw new Error(`Unknown waveform mode: ${waveform}`);
+  }
+  if (options.on_event !== undefined && typeof options.on_event !== "function") {
+    throw new Error("options.on_event must be a function.");
+  }
+  const bound = mode === "bound";
+  const patient = { ...(bound ? NEUTRAL_PATIENT : DEFAULT_PATIENT), ...(options.patient ?? {}) };
+  const emit = (event) => options.on_event?.({ mode, ...event });
+
+  if (options.records !== undefined) {
+    buildRecordsMarkup(options.records); // fail fast on a malformed record set
+  }
+  if (options.treatments !== undefined
+    && (typeof options.treatments !== "object" || options.treatments === null
+      || (options.treatments.available !== undefined && !Array.isArray(options.treatments.available)))) {
+    throw new Error("options.treatments must be an object with an optional available array.");
+  }
+  const features = {
+    records: options.records !== undefined,
+    treatments: options.treatments !== undefined,
+  };
+  let available_treatments = options.treatments?.available ?? [];
+  let active_treatments = [];
+
+  container.classList.add("rohy3d-root");
+  container.innerHTML = buildAppMarkup(groupActions(), patient, mode, waveform, features);
+  const root = container;
 
   let state = createSimulation({
-    log: [createLogEntry(0, "Patient arrived in respiratory distress.", "system")],
+    running: bound,
+    log: [createLogEntry(0, patient.arrival_note, "system")],
   });
-  let active_category = "assess";
+  let bound_vitals = null;
+  let rhythm_override = null;
   let scene_controller = null;
   let toast_timeout = null;
   let result_shown = false;
+  let timeline_expanded = false;
+  let disposed = false;
+  const bound_history = [];
+  const timers = { intervals: [], timeouts: new Set() };
+  const monitor_audio = createMonitorAudio();
 
   const elements = {
-    simulator: document.querySelector(".simulator"),
-    scene_root: document.querySelector("#scene-root"),
-    fallback: document.querySelector("#webgl-fallback"),
-    time: document.querySelector("#case-time"),
-    status: document.querySelector("#status-chip"),
-    patient_state_dot: document.querySelector("#patient-state-dot"),
-    objectives: document.querySelector("#objective-list"),
-    objective_count: document.querySelector("#objective-count"),
-    score: document.querySelector("#score-value"),
-    timeline: document.querySelector("#timeline-list"),
-    caption: document.querySelector("#patient-caption"),
-    live_region: document.querySelector("#live-region"),
-    selection_toast: document.querySelector("#selection-toast"),
-    brief_modal: document.querySelector("#brief-modal"),
-    result_modal: document.querySelector("#result-modal"),
-    pause_button: document.querySelector("#pause-button"),
-    ecg_path: document.querySelector("#ecg-path"),
+    simulator: root.querySelector(".simulator"),
+    scene_root: root.querySelector("#scene-root"),
+    fallback: root.querySelector("#webgl-fallback"),
+    time: root.querySelector("#case-time"),
+    status: root.querySelector("#status-chip"),
+    patient_state_dot: root.querySelector("#patient-state-dot"),
+    objectives: root.querySelector("#objective-list"),
+    objective_count: root.querySelector("#objective-count"),
+    score: root.querySelector("#score-value"),
+    timeline: root.querySelector("#timeline-list"),
+    caption: root.querySelector("#patient-caption"),
+    live_region: root.querySelector("#live-region"),
+    selection_toast: root.querySelector("#selection-toast"),
+    brief_modal: root.querySelector("#brief-modal"),
+    result_modal: root.querySelector("#result-modal"),
+    trends_modal: root.querySelector("#trends-modal"),
+    trends_body: root.querySelector("#trends-body"),
+    records_modal: root.querySelector("#records-modal"),
+    records_body: root.querySelector("#records-body"),
+    treatments_modal: root.querySelector("#treatments-modal"),
+    treatments_body: root.querySelector("#treatments-body"),
+    treatments_button: root.querySelector("#treatments-button"),
+    pause_button: root.querySelector("#pause-button"),
+    timeline_button: root.querySelector("#timeline-button"),
+    last_reading: root.querySelector("#last-reading"),
+    avatar_notice: root.querySelector("#avatar-notice"),
+    ecg_path: root.querySelector("#ecg-path"),
   };
+
+  const currentVitals = () => (bound ? bound_vitals ?? deriveVitals(state) : deriveVitals(state));
 
   const showToast = (message) => {
     window.clearTimeout(toast_timeout);
@@ -393,44 +528,97 @@ export function boot() {
     if (!["assess", "investigate", "treat"].includes(category)) {
       throw new Error(`Unknown action category: ${category}`);
     }
-    active_category = category;
-    document.querySelectorAll("[data-category]").forEach((button) => {
+    root.querySelectorAll("[data-category]").forEach((button) => {
       const is_active = button.dataset.category === category;
       button.classList.toggle("is-active", is_active);
       button.setAttribute("aria-selected", String(is_active));
     });
-    document.querySelectorAll("[data-action-list]").forEach((list) => {
+    root.querySelectorAll("[data-action-list]").forEach((list) => {
       list.hidden = list.dataset.actionList !== category;
     });
   };
 
+  const openModal = (modal, focus_selector) => {
+    if (!modal) return;
+    modal.hidden = false;
+    window.requestAnimationFrame(() => modal.classList.add("is-visible"));
+    if (focus_selector) root.querySelector(focus_selector)?.focus();
+  };
+  const closeModal = (modal) => {
+    if (!modal) return;
+    modal.classList.remove("is-visible");
+    const timeout_id = window.setTimeout(() => {
+      timers.timeouts.delete(timeout_id);
+      modal.hidden = true;
+    }, 300);
+    timers.timeouts.add(timeout_id);
+  };
+
+  const renderTreatments = () => {
+    if (!elements.treatments_body) return;
+    elements.treatments_body.innerHTML = buildTreatmentsMarkup(active_treatments, available_treatments);
+    if (elements.treatments_button) {
+      elements.treatments_button.textContent = active_treatments.length > 0
+        ? `Treatments (${active_treatments.length})`
+        : "Treatments";
+    }
+  };
+  const openRecords = () => {
+    if (!elements.records_modal) return;
+    elements.records_body.innerHTML = buildRecordsMarkup(options.records);
+    openModal(elements.records_modal, "#records-close");
+  };
+  const openTreatments = () => {
+    if (!elements.treatments_modal) return;
+    renderTreatments();
+    openModal(elements.treatments_modal, "#treatments-close");
+  };
+
   const handleSceneSelection = (selection) => {
-    const mapped_action = SELECTION_ACTIONS[selection.id];
     showToast(selection.label);
+    emit({ type: "selection", id: selection.id, label: selection.label });
+    if (bound) {
+      // In a host-driven room the 3D objects open the matching live panel.
+      if (selection.id === "chart" && features.records) openRecords();
+      if ((selection.id === "iv" || selection.id === "oxygen") && features.treatments) openTreatments();
+      if (selection.id === "monitor") root.querySelector("#trend-button")?.click();
+      return;
+    }
+    const mapped_action = SELECTION_ACTIONS[selection.id];
     if (mapped_action) {
       setCategory(mapped_action.category);
-      document.querySelector(`[data-action="${mapped_action.action_id}"]`)?.focus({ preventScroll: true });
+      root.querySelector(`[data-action="${mapped_action.action_id}"]`)?.focus({ preventScroll: true });
     }
   };
 
   import("./scene.js")
     .then(({ initClinicalScene }) => {
-      scene_controller = initClinicalScene(elements.scene_root, handleSceneSelection);
-      const vitals = deriveVitals(state);
-      scene_controller.update(state.status, vitals, state.elapsed_seconds);
-      scene_controller.ready.then((patient) => {
-        if (patient.userData.avatar_source !== "procedural fallback") {
+      if (disposed) return;
+      scene_controller = initClinicalScene(elements.scene_root, handleSceneSelection, {
+        avatar_url: options.avatar_url,
+      });
+      scene_controller.update(state.status, currentVitals(), state.elapsed_seconds);
+      scene_controller.ready.then((loaded_patient) => {
+        if (disposed) return;
+        const fallback = loaded_patient.userData.avatar_source === "procedural fallback";
+        emit({ type: "avatar", fallback, source: loaded_patient.userData.avatar_source });
+        if (!fallback) {
           elements.live_region.textContent = "Rigged full-body patient loaded.";
+        } else {
+          elements.avatar_notice.hidden = false;
+          elements.live_region.textContent = "The full patient model could not load; showing reduced visuals.";
         }
       });
     })
     .catch((error) => {
+      if (disposed) return;
       elements.fallback.hidden = false;
       elements.simulator.classList.add("is-dashboard");
       console.warn("Rohy 3D scene could not start.", error);
     });
 
   const renderObjectives = () => {
+    if (!elements.objectives) return;
     const objectives = deriveObjectives(state.actions);
     elements.objectives.innerHTML = objectives
       .map((objective, index) => `
@@ -443,14 +631,17 @@ export function boot() {
   };
 
   const renderTimeline = () => {
-    elements.timeline.innerHTML = state.log
-      .slice(-4)
+    if (!elements.timeline) return;
+    const visible_events = timeline_expanded ? state.log : state.log.slice(-4);
+    elements.timeline.innerHTML = visible_events
+      .slice()
       .reverse()
       .map((event) => `
         <article class="timeline-event timeline-event--${event.type}">
           <time>${formatElapsed(event.time)}</time><i></i><p>${event.message}</p>
         </article>`)
       .join("");
+    elements.timeline_button.textContent = timeline_expanded ? "Collapse" : "Expand";
   };
 
   const renderVitals = (vitals) => {
@@ -462,51 +653,87 @@ export function boot() {
       temperature: vitals.temperature.toFixed(1),
     };
     Object.entries(vital_values).forEach(([vital_name, value]) => {
-      const vital_element = document.querySelector(`#vital-${vital_name}`);
+      const vital_element = root.querySelector(`#vital-${vital_name}`);
       vital_element.querySelector("[data-vital-value]").textContent = value;
       const severity_value = vital_name === "blood_pressure" ? vitals.systolic : Number(value);
       vital_element.dataset.severity = vitalSeverity(vital_name, severity_value);
     });
-    document.querySelector("#rhythm-label").textContent = vitals.heart_rate > 100 ? "Sinus tachycardia" : "Sinus rhythm";
+    root.querySelector("#rhythm-label").textContent = rhythm_override
+      ?? (vitals.heart_rate > 100 ? "Sinus tachycardia" : "Sinus rhythm");
   };
 
   const showResult = () => {
-    if (result_shown) return;
+    if (result_shown || !elements.result_modal) return;
     result_shown = true;
-    document.querySelector("#result-score").textContent = String(state.score).padStart(3, "0");
-    document.querySelector("#result-time").textContent = formatElapsed(state.elapsed_seconds);
-    document.querySelector("#result-actions").textContent = state.actions.length;
+    root.querySelector("#result-score").textContent = String(state.score).padStart(3, "0");
+    root.querySelector("#result-time").textContent = formatElapsed(state.elapsed_seconds);
+    root.querySelector("#result-actions").textContent = state.actions.length;
     elements.result_modal.hidden = false;
     window.requestAnimationFrame(() => elements.result_modal.classList.add("is-visible"));
-    document.querySelector("#continue-button").focus();
+    root.querySelector("#continue-button").focus();
   };
 
   const render = () => {
-    const vitals = deriveVitals(state);
-    const current_status = derivePatientStatus(vitals, state.actions);
+    const vitals = currentVitals();
+    const current_status = bound
+      ? state.status
+      : derivePatientStatus(vitals, state.actions);
     state = { ...state, status: current_status };
     elements.simulator.dataset.status = current_status;
     elements.time.textContent = formatElapsed(state.elapsed_seconds);
     elements.status.className = `status-chip status-chip--${current_status}`;
     elements.status.innerHTML = `<span></span><strong>${current_status}</strong><small>${getStatusCopy(current_status)}</small>`;
-    elements.patient_state_dot.textContent = current_status === "stable" ? "● STABLE" : current_status === "stabilizing" ? "● RESPONDING" : "● HIGH ACUITY";
-    elements.score.textContent = String(state.score).padStart(3, "0");
-    elements.pause_button.innerHTML = state.running ? uiIcon("pause") : uiIcon("play");
-    elements.pause_button.setAttribute("aria-label", state.running ? "Pause simulation" : "Resume simulation");
+    if (elements.patient_state_dot) {
+      elements.patient_state_dot.textContent = current_status === "stable" ? "● STABLE" : current_status === "stabilizing" ? "● RESPONDING" : "● HIGH ACUITY";
+    }
+    if (elements.score) {
+      elements.score.textContent = String(state.score).padStart(3, "0");
+    }
+    if (elements.pause_button) {
+      elements.pause_button.innerHTML = state.running ? uiIcon("pause") : uiIcon("play");
+      elements.pause_button.setAttribute("aria-label", state.running ? "Pause simulation" : "Resume simulation");
+    }
     renderVitals(vitals);
     renderObjectives();
     renderTimeline();
+    elements.last_reading.textContent = `Last reading · ${formatElapsed(state.elapsed_seconds)}`;
     scene_controller?.update(current_status, vitals, state.elapsed_seconds);
 
-    document.querySelectorAll("[data-action]").forEach((button) => {
+    root.querySelectorAll("[data-action]").forEach((button) => {
       const complete = state.actions.includes(button.dataset.action);
       button.classList.toggle("is-complete", complete);
       button.setAttribute("aria-pressed", String(complete));
       if (complete) button.querySelector(".action-card__state").innerHTML = uiIcon("check");
     });
 
-    if (state.completed) {
-      window.setTimeout(showResult, 600);
+    if (!bound && state.completed) {
+      const timeout_id = window.setTimeout(() => {
+        timers.timeouts.delete(timeout_id);
+        showResult();
+      }, 600);
+      timers.timeouts.add(timeout_id);
+    }
+  };
+
+  let caption_hide_timeout = null;
+  const say = (line) => {
+    if (typeof line !== "string" || line.length === 0) {
+      throw new Error("line must be a non-empty string.");
+    }
+    elements.caption.querySelector("p").textContent = `“${line}”`;
+    elements.caption.hidden = false;
+    elements.caption.classList.remove("is-speaking");
+    window.requestAnimationFrame(() => elements.caption.classList.add("is-speaking"));
+    if (bound) {
+      // The host's case owns the conversation; the caption is a transient
+      // subtitle for what was just said, not a parked quote.
+      window.clearTimeout(caption_hide_timeout);
+      timers.timeouts.delete(caption_hide_timeout);
+      caption_hide_timeout = window.setTimeout(() => {
+        timers.timeouts.delete(caption_hide_timeout);
+        elements.caption.hidden = true;
+      }, 8_000);
+      timers.timeouts.add(caption_hide_timeout);
     }
   };
 
@@ -514,111 +741,281 @@ export function boot() {
     const transition = applyClinicalAction(state, action_id);
     state = transition.state;
     const definition = ACTION_DEFINITIONS[action_id];
-    elements.caption.querySelector("p").textContent = `“${PATIENT_REPLIES[action_id]}”`;
-    elements.caption.classList.remove("is-speaking");
-    window.requestAnimationFrame(() => elements.caption.classList.add("is-speaking"));
+    say(PATIENT_REPLIES[action_id]);
     elements.live_region.textContent = transition.event.message;
     showToast(transition.duplicate ? `${definition.short_label} already completed` : `${definition.short_label} completed`);
+    emit({
+      type: "action",
+      action_id,
+      duplicate: transition.duplicate,
+      event: transition.event,
+      score: state.score,
+      status: state.status,
+      completed: state.completed,
+    });
     render();
   };
 
-  document.querySelectorAll("[data-category]").forEach((button) => {
-    button.addEventListener("click", () => setCategory(button.dataset.category));
-  });
-  document.querySelectorAll("[data-action]").forEach((button) => {
-    button.addEventListener("click", () => performAction(button.dataset.action));
-  });
-  document.querySelectorAll("[data-camera]").forEach((button) => {
-    button.addEventListener("click", () => {
-      document.querySelectorAll("[data-camera]").forEach((camera_button) => camera_button.classList.remove("is-active"));
-      button.classList.add("is-active");
-      scene_controller?.focusPreset(button.dataset.camera);
-    });
+  const on = (selector, handler) => {
+    root.querySelectorAll(selector).forEach((element) => element.addEventListener("click", handler));
+  };
+
+  on("[data-category]", (event) => setCategory(event.currentTarget.dataset.category));
+  on("[data-action]", (event) => performAction(event.currentTarget.dataset.action));
+  on("[data-camera]", (event) => {
+    root.querySelectorAll("[data-camera]").forEach((camera_button) => camera_button.classList.remove("is-active"));
+    event.currentTarget.classList.add("is-active");
+    scene_controller?.focusPreset(event.currentTarget.dataset.camera);
   });
 
-  document.querySelector("#begin-button").addEventListener("click", () => {
+  root.querySelector("#begin-button")?.addEventListener("click", () => {
+    monitor_audio.enable();
     state = { ...state, running: true };
     elements.brief_modal.classList.add("is-closing");
-    window.setTimeout(() => {
+    const timeout_id = window.setTimeout(() => {
+      timers.timeouts.delete(timeout_id);
       elements.brief_modal.hidden = true;
       elements.brief_modal.classList.remove("is-closing");
     }, 420);
+    timers.timeouts.add(timeout_id);
     render();
   });
-  document.querySelector("#brief-button").addEventListener("click", () => {
+  root.querySelector("#brief-button")?.addEventListener("click", () => {
     elements.brief_modal.hidden = false;
     window.requestAnimationFrame(() => elements.brief_modal.classList.remove("is-closing"));
   });
-  elements.pause_button.addEventListener("click", () => {
+  elements.pause_button?.addEventListener("click", () => {
     state = { ...state, running: !state.running };
     showToast(state.running ? "Simulation resumed" : "Simulation paused");
     render();
   });
-  document.querySelector("#sound-button").addEventListener("click", (event) => {
+  root.querySelector("#sound-button")?.addEventListener("click", (event) => {
+    monitor_audio.enable();
     const pressed = event.currentTarget.getAttribute("aria-pressed") === "true";
     event.currentTarget.setAttribute("aria-pressed", String(!pressed));
+    monitor_audio.setMuted(!pressed);
     showToast(pressed ? "Audio cues enabled" : "Audio cues muted");
   });
-  document.querySelector("#dashboard-button").addEventListener("click", (event) => {
+  root.querySelector("#dashboard-button")?.addEventListener("click", (event) => {
     const enabled = !elements.simulator.classList.contains("is-dashboard");
     elements.simulator.classList.toggle("is-dashboard", enabled);
     event.currentTarget.setAttribute("aria-pressed", String(enabled));
     showToast(enabled ? "Simplified dashboard view" : "Interactive 3D view");
   });
-  document.querySelector("#settings-button").addEventListener("click", (event) => {
+  root.querySelector("#settings-button").addEventListener("click", (event) => {
     const enabled = !elements.simulator.classList.contains("is-high-contrast");
     elements.simulator.classList.toggle("is-high-contrast", enabled);
     event.currentTarget.setAttribute("aria-pressed", String(enabled));
     showToast(enabled ? "High contrast enabled" : "High contrast disabled");
   });
-  document.querySelector("#timeline-button").addEventListener("click", () => {
-    document.querySelector(".activity-panel").classList.toggle("is-expanded");
+  root.querySelector("#timeline-button")?.addEventListener("click", () => {
+    timeline_expanded = !timeline_expanded;
+    root.querySelector(".activity-panel").classList.toggle("is-expanded", timeline_expanded);
+    renderTimeline();
   });
-  document.querySelector("#trend-button").addEventListener("click", () => {
-    showToast("Trend review will unlock after three readings");
+  root.querySelector("#trend-button").addEventListener("click", () => {
+    const rows = bound ? sampleTrendRows(bound_history) : deriveVitalTrends(state);
+    if (rows.length < 2) {
+      showToast("Trends need at least two monitor readings");
+      return;
+    }
+    elements.trends_body.innerHTML = buildTrendsMarkup(rows);
+    elements.trends_modal.hidden = false;
+    window.requestAnimationFrame(() => elements.trends_modal.classList.add("is-visible"));
+    root.querySelector("#trends-close").focus();
   });
-  document.querySelector("#continue-button").addEventListener("click", () => {
+  root.querySelector("#trends-close").addEventListener("click", () => {
+    closeModal(elements.trends_modal);
+  });
+  root.querySelector("#records-button")?.addEventListener("click", openRecords);
+  root.querySelector("#records-close")?.addEventListener("click", () => closeModal(elements.records_modal));
+  elements.treatments_button?.addEventListener("click", openTreatments);
+  root.querySelector("#treatments-close")?.addEventListener("click", () => closeModal(elements.treatments_modal));
+  elements.treatments_body?.addEventListener("click", (event) => {
+    const order_button = event.target.closest?.(".treatment-order");
+    if (!order_button) return;
+    const treatment = available_treatments[Number(order_button.dataset.orderIndex)];
+    if (!treatment) return;
+    order_button.disabled = true;
+    emit({ type: "order_request", treatment });
+    showToast(`${treatment.name} ordered`);
+  });
+  root.querySelector("#continue-button")?.addEventListener("click", () => {
     elements.result_modal.classList.remove("is-visible");
-    window.setTimeout(() => { elements.result_modal.hidden = true; }, 300);
+    const timeout_id = window.setTimeout(() => {
+      timers.timeouts.delete(timeout_id);
+      elements.result_modal.hidden = true;
+    }, 300);
+    timers.timeouts.add(timeout_id);
     state = { ...state, completed: false, running: true };
   });
-  document.querySelector("#restart-button").addEventListener("click", () => {
+  root.querySelector("#restart-button")?.addEventListener("click", () => {
     state = createSimulation({
       running: true,
       log: [createLogEntry(0, "Scenario restarted.", "system")],
     });
     result_shown = false;
     elements.result_modal.classList.remove("is-visible");
-    window.setTimeout(() => { elements.result_modal.hidden = true; }, 300);
+    const timeout_id = window.setTimeout(() => {
+      timers.timeouts.delete(timeout_id);
+      elements.result_modal.hidden = true;
+    }, 300);
+    timers.timeouts.add(timeout_id);
     render();
   });
 
-  document.addEventListener("keydown", (event) => {
+  const handleKeydown = (event) => {
     if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLAnchorElement) return;
     const camera_names = ["overview", "patient", "airway", "monitor", "equipment"];
     if (/^[1-5]$/.test(event.key)) {
-      document.querySelector(`[data-camera="${camera_names[Number(event.key) - 1]}"]`)?.click();
+      root.querySelector(`[data-camera="${camera_names[Number(event.key) - 1]}"]`)?.click();
     }
-    if (event.code === "Space" && elements.brief_modal.hidden) {
+    if (event.code === "Space" && elements.pause_button && (!elements.brief_modal || elements.brief_modal.hidden)) {
       event.preventDefault();
       elements.pause_button.click();
     }
-  });
+    if (event.key === "Escape") {
+      [elements.trends_modal, elements.records_modal, elements.treatments_modal]
+        .filter((modal) => modal && !modal.hidden)
+        .forEach((modal) => closeModal(modal));
+    }
+  };
+  document.addEventListener("keydown", handleKeydown);
 
-  window.setInterval(() => {
-    state = tickSimulation(state, 1);
-    if (state.running) render();
-  }, 1000);
-  let wave_phase = 0;
-  window.setInterval(() => {
-    wave_phase += 0.18;
-    const vitals = deriveVitals(state);
-    elements.ecg_path.setAttribute("d", createWavePath(vitals.heart_rate, 640, 96, wave_phase));
-  }, 90);
+  if (!bound) {
+    timers.intervals.push(window.setInterval(() => {
+      state = tickSimulation(state, 1);
+      if (state.running) render();
+    }, 1000));
+  }
+  if (waveform === "internal") {
+    let wave_phase = 0;
+    timers.intervals.push(window.setInterval(() => {
+      wave_phase += 0.18;
+      elements.ecg_path.setAttribute("d", createWavePath(currentVitals().heart_rate, 640, 96, wave_phase));
+    }, 90));
+  }
+  const heartbeatLoop = () => {
+    if (disposed) return;
+    const vitals = currentVitals();
+    if (state.running) {
+      monitor_audio.beat(vitals);
+    }
+    const timeout_id = window.setTimeout(() => {
+      timers.timeouts.delete(timeout_id);
+      heartbeatLoop();
+    }, Math.round(60_000 / Math.max(vitals.heart_rate, 30)));
+    timers.timeouts.add(timeout_id);
+  };
+  if (!bound) {
+    // In bound mode the host's own monitor owns audio; the room has no sound
+    // control there and never creates an AudioContext.
+    heartbeatLoop();
+  }
 
   render();
+
+  return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      timers.intervals.forEach((interval_id) => window.clearInterval(interval_id));
+      timers.timeouts.forEach((timeout_id) => window.clearTimeout(timeout_id));
+      window.clearTimeout(toast_timeout);
+      document.removeEventListener("keydown", handleKeydown);
+      scene_controller?.dispose();
+      container.innerHTML = "";
+      container.classList.remove("rohy3d-root");
+    },
+    update(vitals, status, elapsed_seconds, extras = {}) {
+      if (!bound) {
+        throw new Error("update() is only available in bound mode; the standalone engine derives its own vitals.");
+      }
+      validateVitals(vitals);
+      if (!Number.isFinite(elapsed_seconds) || elapsed_seconds < 0) {
+        throw new Error("elapsed_seconds must be a non-negative finite number.");
+      }
+      if (extras.rhythm !== undefined && extras.rhythm !== null
+        && (typeof extras.rhythm !== "string" || extras.rhythm.length === 0)) {
+        throw new Error("extras.rhythm must be a non-empty string or null when provided.");
+      }
+      if (extras.rhythm !== undefined) {
+        // A string names the rhythm on the monitor label; null clears the
+        // override so the label falls back to the heart-rate-derived text.
+        rhythm_override = extras.rhythm;
+      }
+      // With no action history, derivePatientStatus can never report "stable";
+      // grant the escalation criterion so a host that omits status still spans
+      // the full range from its numbers alone.
+      const next_status = status ?? derivePatientStatus(vitals, ["call_team"]);
+      if (!PATIENT_STATUSES.includes(next_status)) {
+        throw new Error(`Unknown patient status: ${next_status}`);
+      }
+      bound_vitals = { ...vitals };
+      const status_changed = next_status !== state.status;
+      state = { ...state, elapsed_seconds, status: next_status };
+      bound_history.push({ time: Math.round(elapsed_seconds), ...bound_vitals });
+      if (bound_history.length > 720) {
+        bound_history.shift();
+      }
+      if (status_changed) {
+        emit({ type: "status", status: next_status });
+      }
+      render();
+    },
+    addTimelineEvent(message, type = "system", time = state.elapsed_seconds) {
+      state = { ...state, log: [...state.log, createLogEntry(time, message, type)] };
+      elements.live_region.textContent = message;
+      renderTimeline();
+    },
+    say,
+    applyAction(action_id) {
+      if (bound) {
+        throw new Error("applyAction() is only available in standalone mode; the host owns actions in bound mode.");
+      }
+      performAction(action_id);
+    },
+    focusPreset(name) {
+      root.querySelector(`[data-camera="${name}"]`)?.click();
+    },
+    getState() {
+      return { ...state, actions: [...state.actions], log: [...state.log] };
+    },
+    openRecords,
+    openTreatments,
+    setAvailableTreatments(treatments) {
+      if (!Array.isArray(treatments)) {
+        throw new Error("treatments must be an array.");
+      }
+      available_treatments = [...treatments];
+      renderTreatments();
+    },
+    setActiveTreatments(treatments) {
+      if (!Array.isArray(treatments)) {
+        throw new Error("treatments must be an array.");
+      }
+      active_treatments = [...treatments];
+      renderTreatments();
+    },
+    // Present only with waveform: "host" — the host draws its own ECG here.
+    ecg_canvas: root.querySelector("#ecg-canvas"),
+  };
 }
 
-if (typeof document !== "undefined") {
+/**
+ * Boot the standalone application into the page's #app element.
+ * @return {ReturnType<typeof mountPatientRoom>} Room controller.
+ * @example
+ * boot();
+ */
+export function boot() {
+  const app = document.querySelector("#app");
+  if (!app) {
+    throw new Error("#app root was not found.");
+  }
+  return mountPatientRoom(app);
+}
+
+if (typeof document !== "undefined" && document.querySelector("#app")) {
   boot();
 }

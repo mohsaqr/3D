@@ -1,8 +1,13 @@
 {
   "name": "rohy-3d-patient-room",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/main.js",
+    "./simulation": "./src/simulation.js",
+    "./ui-helpers": "./src/ui-helpers.js"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,10 +15,11 @@
     "test": "node --test",
     "test:browser": "node scripts/browser-smoke.mjs"
   },
-  "dependencies": {
-    "three": "0.185.1"
+  "peerDependencies": {
+    "three": "^0.184.0 || ^0.185.0"
   },
   "devDependencies": {
+    "three": "0.185.1",
     "vite": "8.2.2"
   }
 }

@@ -348,6 +348,41 @@ export function deriveObjectives(actions) {
 }
 
 /**
+ * Reconstruct vital-sign history by replaying logged actions over scenario time.
+ * @param {ReturnType<typeof createSimulation>} state Simulation state.
+ * @param {{samples?: number}} [options] Sampling configuration.
+ * @return {Array<typeof BASELINE_VITALS & {time: number}>} One row per sample,
+ *   ordered by time from scenario start to the current moment.
+ * @example
+ * deriveVitalTrends(createSimulation(), { samples: 6 });
+ */
+export function deriveVitalTrends(state, options = {}) {
+  validateState(state);
+  const samples = options.samples ?? 13;
+  if (!Number.isInteger(samples) || samples < 2) {
+    throw new Error("options.samples must be an integer of at least 2.");
+  }
+
+  const action_start_times = state.actions.map((action_id) => ({
+    action_id,
+    time: state.log.find((event) => event.action_id === action_id)?.time ?? 0,
+  }));
+
+  return Array.from({ length: samples }, (_, sample_index) => {
+    const time = (state.elapsed_seconds * sample_index) / (samples - 1);
+    const applied_actions = action_start_times
+      .filter((entry) => entry.time <= time)
+      .map((entry) => entry.action_id);
+    const vitals = deriveVitals({
+      ...state,
+      elapsed_seconds: time,
+      actions: applied_actions,
+    });
+    return { time: Math.round(time), ...vitals };
+  });
+}
+
+/**
  * Group actions for the action tray.
  * @return {Record<string, Array<object>>} Action definitions grouped by category.
  * @example
