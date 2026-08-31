@@ -70,6 +70,15 @@
   background: #07181c;
 }
 
+/* Bound rooms live inside a host the embedding app sizes (e.g. ending
+   above its room navigator). A forced minimum would overflow a short host
+   and get clipped at its edge — pushing bottom-anchored UI like the
+   finding card visually "under" the host's own bottom chrome. Doubled
+   class so the small-screen media override below never re-imposes one. */
+.simulator.simulator--bound {
+  min-height: 0;
+}
+
 .simulator[data-status="unstable"] {
   --status: var(--amber);
 }
