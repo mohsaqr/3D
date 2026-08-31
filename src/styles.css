@@ -722,17 +722,12 @@
 
 .view-wheel {
   z-index: 6;
-  bottom: 208px;
-  left: 50%;
+  top: 50%;
+  left: 22px;
   width: 300px;
   height: 300px;
   pointer-events: none;
-  transform: translateX(-50%);
-}
-
-/* Bound rooms have no action dock — the wheel sits low and central. */
-.simulator--bound .view-wheel {
-  bottom: 30px;
+  transform: translateY(-50%);
 }
 
 .view-wheel.is-open {
@@ -1599,7 +1594,7 @@
   .monitor-panel { width: 268px; }
   .activity-panel { display: none; }
   .action-dock { right: 286px; left: 16px; min-width: 520px; }
-  .view-wheel { bottom: 24px; }
+  .view-wheel { left: 12px; }
   .patient-caption { bottom: 228px; }
   .action-card__copy small { display: none; }
 }
