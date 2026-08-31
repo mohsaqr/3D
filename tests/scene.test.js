@@ -5,6 +5,7 @@ import * as THREE from "three";
 
 import {
   aimBoneAtWorldDirection,
+  attachBodyRegions,
   configurePatientAvatar,
   createBed,
   createClinicalRoom,
@@ -1011,4 +1012,47 @@ test("tagInteractive rejects invalid objects and non-string metadata", () => {
     () => tagInteractive(new THREE.Group(), "bed", null),
     /id and label must be strings/,
   );
+});
+
+test("attachBodyRegions creates invisible raycastable colliders with region data", () => {
+  const patient = createPatient();
+  const regions = [
+    { id: "chestAnterior", label: "Anterior chest", center: [0, 1.5, -0.55], size: [0.85, 0.4, 0.75] },
+    { id: "abdomen", label: "Abdomen", center: [0, 1.45, 0.28], size: [0.8, 0.35, 0.8] },
+  ];
+  const colliders = attachBodyRegions(patient, regions);
+
+  assert.equal(colliders.length, 2);
+  assert.strictEqual(patient.userData.body_region_colliders, colliders);
+  colliders.forEach((collider, index) => {
+    assert.ok(collider instanceof THREE.Mesh);
+    assert.equal(collider.name, `body-region-${regions[index].id}`);
+    assert.equal(collider.material.opacity, 0, "colliders start invisible");
+    assert.equal(collider.material.transparent, true);
+    assert.deepEqual(findInteractiveData(collider), {
+      id: regions[index].id,
+      label: regions[index].label,
+      kind: "region",
+    });
+  });
+
+  // A ray straight down through the chest must hit the chest collider first.
+  patient.updateMatrixWorld(true);
+  const raycaster = new THREE.Raycaster(new THREE.Vector3(0, 5, -0.55), new THREE.Vector3(0, -1, 0));
+  const hit = raycaster.intersectObjects(colliders, false)[0];
+  assert.equal(hit.object.name, "body-region-chestAnterior");
+});
+
+test("attachBodyRegions validates the patient and every region shape", () => {
+  const patient = createPatient();
+  assert.throws(() => attachBodyRegions(null, []), /patient must be a THREE.Object3D/);
+  assert.throws(() => attachBodyRegions(patient, []), /non-empty array/);
+  [
+    { label: "x", center: [0, 0, 0], size: [1, 1, 1] },
+    { id: "a", label: "x", center: [0, 0], size: [1, 1, 1] },
+    { id: "a", label: "x", center: [0, 0, 0], size: [1, 0, 1] },
+    { id: "a", label: "", center: [0, 0, 0], size: [1, 1, 1] },
+  ].forEach((bad_region) => {
+    assert.throws(() => attachBodyRegions(patient, [bad_region]), /every region needs/);
+  });
 });

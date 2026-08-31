@@ -666,6 +666,10 @@ async function runSmoke(client, app_url, report) {
           { name: "Metoprolol", detail: "IV · 5 mg", treatment_type: "medication" },
         ],
       },
+      body_regions: [
+        { id: "chestAnterior", label: "Anterior chest", center: [0, 1.5, -0.9], size: [1.2, 0.8, 1.6] },
+        { id: "abdomen", label: "Abdomen", center: [0, 1.45, 0.5], size: [0.9, 0.5, 0.9] },
+      ],
       on_event: (event) => events.push(event),
     });
     window.__bound_room = room;
@@ -741,6 +745,31 @@ async function runSmoke(client, app_url, report) {
       caption_text: "“The fluttering in my chest has eased a little.”",
     },
   );
+  const region_click = await client.evaluate(`(async () => {
+    const host = document.querySelector("#bound-host");
+    window.__bound_room.focusPreset("patient");
+    await new Promise((resolve) => setTimeout(resolve, 950));
+    const canvas = host.querySelector("#scene-root canvas");
+    const bounds = canvas.getBoundingClientRect();
+    const x = bounds.left + bounds.width / 2;
+    const y = bounds.top + bounds.height / 2;
+    canvas.dispatchEvent(new PointerEvent("pointermove", { clientX: x, clientY: y, bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const cursor = canvas.style.cursor;
+    canvas.dispatchEvent(new MouseEvent("click", { clientX: x, clientY: y, bubbles: true }));
+    const region_events = window.__bound_events.filter(
+      (event) => event.type === "selection" && event.kind === "region",
+    );
+    return { cursor, region_ids: region_events.map((event) => event.id) };
+  })()`);
+  assert.equal(region_click.cursor, "pointer", "Hovering a body region must show a pointer cursor.");
+  assert.deepEqual(
+    region_click.region_ids,
+    ["chestAnterior"],
+    "Clicking the patient's chest must report the host-supplied region id.",
+  );
+  report.checks.push("body-region collider hover and click reported the examined region");
+
   const treatments_state = await client.evaluate(`(() => {
     const host = document.querySelector("#bound-host");
     window.__bound_room.openTreatments();

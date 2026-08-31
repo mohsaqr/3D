@@ -467,6 +467,19 @@ export function mountPatientRoom(container, options = {}) {
       || (options.treatments.available !== undefined && !Array.isArray(options.treatments.available)))) {
     throw new Error("options.treatments must be an object with an optional available array.");
   }
+  if (options.body_regions !== undefined) {
+    if (!Array.isArray(options.body_regions) || options.body_regions.length === 0) {
+      throw new Error("options.body_regions must be a non-empty array when provided.");
+    }
+    options.body_regions.forEach((region) => {
+      if (typeof region?.id !== "string" || region.id.length === 0
+        || typeof region.label !== "string" || region.label.length === 0
+        || !Array.isArray(region.center) || region.center.length !== 3 || !region.center.every(Number.isFinite)
+        || !Array.isArray(region.size) || region.size.length !== 3 || !region.size.every((v) => Number.isFinite(v) && v > 0)) {
+        throw new Error("every body region needs id, label, center[3], and positive size[3].");
+      }
+    });
+  }
   const features = {
     records: options.records !== undefined,
     treatments: options.treatments !== undefined,
@@ -589,7 +602,7 @@ export function mountPatientRoom(container, options = {}) {
 
   const handleSceneSelection = (selection) => {
     showToast(selection.label);
-    emit({ type: "selection", id: selection.id, label: selection.label });
+    emit({ type: "selection", ...selection });
     if (bound) {
       // In a host-driven room the 3D objects open the matching live panel.
       if (selection.id === "chart" && features.records) openRecords();
@@ -609,6 +622,7 @@ export function mountPatientRoom(container, options = {}) {
       if (disposed) return;
       scene_controller = initClinicalScene(elements.scene_root, handleSceneSelection, {
         avatar_url: options.avatar_url,
+        body_regions: options.body_regions ?? null,
       });
       scene_controller.update(state.status, currentVitals(), state.elapsed_seconds);
       scene_controller.ready.then((loaded_patient) => {

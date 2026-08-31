@@ -948,6 +948,10 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
   if (typeof avatar_url !== "string" || avatar_url.length === 0) {
     throw new Error("options.avatar_url must be a non-empty string when provided.");
   }
+  const body_regions = options.body_regions ?? null;
+  if (body_regions !== null && (!Array.isArray(body_regions) || body_regions.length === 0)) {
+    throw new Error("options.body_regions must be a non-empty array when provided.");
+  }
   if (!(container instanceof HTMLElement)) {
     throw new Error("container must be an HTMLElement.");
   }
@@ -1044,6 +1048,9 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
         });
       });
       room.add(patient);
+      if (body_regions) {
+        attachBodyRegions(patient, body_regions);
+      }
       updateClinicalScene(room, current_status, current_vitals, elapsed_seconds);
       container.dataset.avatarReady = "true";
       container.dataset.avatarSource = patient.userData.avatar_source;
@@ -1054,6 +1061,9 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
         const fallback_patient = createPatient();
         fallback_patient.userData.avatar_source = "procedural fallback";
         room.add(fallback_patient);
+        if (body_regions) {
+          attachBodyRegions(fallback_patient, body_regions);
+        }
         container.dataset.avatarReady = "fallback";
         console.warn("The full-body Rohy avatar could not load; using the fallback patient.", error);
         return fallback_patient;
@@ -1065,11 +1075,15 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
   const pointer = new THREE.Vector2();
   let frame_id = 0;
 
-  const handle_pointer = (event) => {
+  const setPointerFromEvent = (event) => {
     const bounds = renderer.domElement.getBoundingClientRect();
     pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
     pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
+  };
+
+  const handle_pointer = (event) => {
+    setPointerFromEvent(event);
     const hit = raycaster.intersectObject(room, true).find((intersection) => {
       return findInteractiveData(intersection.object);
     });
@@ -1078,6 +1092,24 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
     }
   };
   renderer.domElement.addEventListener("click", handle_pointer);
+
+  // Hover highlight for examination regions: the collider under the pointer
+  // glows faintly and the cursor becomes a pointer.
+  let hovered_region = null;
+  const handle_hover = (event) => {
+    const colliders = room.getObjectByName("patient-avatar")?.userData.body_region_colliders;
+    if (!colliders?.length) return;
+    setPointerFromEvent(event);
+    const hit = raycaster.intersectObjects(colliders, false)[0]?.object ?? null;
+    if (hit === hovered_region) return;
+    if (hovered_region) hovered_region.material.opacity = 0;
+    if (hit) hit.material.opacity = 0.16;
+    hovered_region = hit;
+    renderer.domElement.style.cursor = hit ? "pointer" : "";
+  };
+  if (body_regions) {
+    renderer.domElement.addEventListener("pointermove", handle_hover);
+  }
 
   const resize = () => {
     const width = Math.max(container.clientWidth, 1);
@@ -1138,12 +1170,62 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
       window.cancelAnimationFrame(frame_id);
       resize_observer.disconnect();
       renderer.domElement.removeEventListener("click", handle_pointer);
+      renderer.domElement.removeEventListener("pointermove", handle_hover);
       controls.dispose();
       disposeObject(scene);
       renderer.dispose();
       renderer.domElement.remove();
     },
   };
+}
+
+/**
+ * Attach invisible, raycastable examination-region colliders to the patient.
+ *
+ * Regions are host-defined boxes in patient-group space (the supine pose is
+ * fixed, so static boxes track the body). Each collider carries
+ * `{id, label, kind: "region"}` interaction data, so a click reports the
+ * region id the host supplied; hover highlighting is handled by the scene.
+ *
+ * @param {THREE.Object3D} patient Patient group (avatar or fallback).
+ * @param {Array<{id: string, label: string, center: number[], size: number[]}>} regions
+ *   Region definitions; center/size are [x, y, z] in patient space.
+ * @return {THREE.Mesh[]} The created colliders.
+ * @example
+ * attachBodyRegions(patient, [{id: "chestAnterior", label: "Chest", center: [0, 1.5, -0.55], size: [0.85, 0.4, 0.75]}]);
+ */
+export function attachBodyRegions(patient, regions) {
+  if (!(patient instanceof THREE.Object3D)) {
+    throw new Error("patient must be a THREE.Object3D.");
+  }
+  if (!Array.isArray(regions) || regions.length === 0) {
+    throw new Error("regions must be a non-empty array.");
+  }
+  const colliders = regions.map((region) => {
+    if (typeof region?.id !== "string" || region.id.length === 0
+      || typeof region.label !== "string" || region.label.length === 0
+      || !Array.isArray(region.center) || region.center.length !== 3 || !region.center.every(Number.isFinite)
+      || !Array.isArray(region.size) || region.size.length !== 3 || !region.size.every((v) => Number.isFinite(v) && v > 0)) {
+      throw new Error("every region needs id, label, center[3], and positive size[3].");
+    }
+    const collider = new THREE.Mesh(
+      new THREE.BoxGeometry(...region.size),
+      new THREE.MeshBasicMaterial({
+        color: 0x2ae0bd,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      }),
+    );
+    collider.name = `body-region-${region.id}`;
+    collider.position.set(...region.center);
+    collider.userData.interactive = { id: region.id, label: region.label, kind: "region" };
+    collider.userData.body_region = true;
+    patient.add(collider);
+    return collider;
+  });
+  patient.userData.body_region_colliders = colliders;
+  return colliders;
 }
 
 /**
