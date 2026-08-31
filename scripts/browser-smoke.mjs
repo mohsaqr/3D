@@ -770,6 +770,14 @@ async function runSmoke(client, app_url, report) {
   );
   report.checks.push("body-region collider hover and click reported the examined region");
 
+  await client.evaluate(`(() => {
+    window.__bound_room.emphasizeRegion("chestAnterior");
+    window.__bound_room.focusRegion([0, 1.5, -0.6]);
+    window.__bound_room.emphasizeRegion(null);
+    return true;
+  })()`);
+  report.checks.push("region emphasis and camera focus APIs executed without errors");
+
   const treatments_state = await client.evaluate(`(() => {
     const host = document.querySelector("#bound-host");
     window.__bound_room.openTreatments();

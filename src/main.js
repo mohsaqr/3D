@@ -1005,6 +1005,14 @@ export function mountPatientRoom(container, options = {}) {
     focusPreset(name) {
       root.querySelector(`[data-camera="${name}"]`)?.click();
     },
+    // Move the camera in on a body region and keep it lit while examined;
+    // both no-op until the 3D scene has started.
+    focusRegion(center) {
+      scene_controller?.focusPoint(center);
+    },
+    emphasizeRegion(region_id) {
+      scene_controller?.setRegionEmphasis(region_id);
+    },
     getState() {
       return { ...state, actions: [...state.actions], log: [...state.log] };
     },

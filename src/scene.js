@@ -1094,16 +1094,23 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
   renderer.domElement.addEventListener("click", handle_pointer);
 
   // Hover highlight for examination regions: the collider under the pointer
-  // glows faintly and the cursor becomes a pointer.
+  // glows faintly and the cursor becomes a pointer. An emphasized region
+  // (the one currently under examination) stays lit regardless of hover.
   let hovered_region = null;
+  let emphasized_region = null;
+  const regionColliders = () => room.getObjectByName("patient-avatar")?.userData.body_region_colliders;
   const handle_hover = (event) => {
-    const colliders = room.getObjectByName("patient-avatar")?.userData.body_region_colliders;
+    const colliders = regionColliders();
     if (!colliders?.length) return;
     setPointerFromEvent(event);
     const hit = raycaster.intersectObjects(colliders, false)[0]?.object ?? null;
     if (hit === hovered_region) return;
-    if (hovered_region) hovered_region.material.opacity = 0;
-    if (hit) hit.material.opacity = 0.16;
+    if (hovered_region && hovered_region !== emphasized_region) {
+      hovered_region.material.opacity = 0;
+    }
+    if (hit && hit !== emphasized_region) {
+      hit.material.opacity = 0.16;
+    }
     hovered_region = hit;
     renderer.domElement.style.cursor = hit ? "pointer" : "";
   };
@@ -1159,6 +1166,36 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
         to_position: preset.position,
         to_target: preset.target,
       };
+    },
+    // Glide the camera to look closely at a point in room space — used to
+    // move in on the body region under examination.
+    focusPoint(point) {
+      if (!Array.isArray(point) || point.length !== 3 || !point.every(Number.isFinite)) {
+        throw new Error("point must be [x, y, z] finite numbers.");
+      }
+      const target = new THREE.Vector3(...point);
+      camera_transition = {
+        start: performance.now(),
+        from_position: camera.position.clone(),
+        from_target: controls.target.clone(),
+        to_position: new THREE.Vector3(target.x * 0.25 + 1.55, target.y + 0.95, target.z + 1.15),
+        to_target: target,
+      };
+    },
+    // Keep one region lit while it is being examined; null clears.
+    setRegionEmphasis(region_id) {
+      if (region_id !== null && (typeof region_id !== "string" || region_id.length === 0)) {
+        throw new Error("region_id must be a non-empty string or null.");
+      }
+      if (emphasized_region) {
+        emphasized_region.material.opacity = emphasized_region === hovered_region ? 0.16 : 0;
+      }
+      emphasized_region = region_id
+        ? regionColliders()?.find((collider) => collider.userData.interactive.id === region_id) ?? null
+        : null;
+      if (emphasized_region) {
+        emphasized_region.material.opacity = 0.22;
+      }
     },
     update(status, vitals, seconds) {
       current_status = status;
