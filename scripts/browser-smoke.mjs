@@ -754,12 +754,21 @@ async function runSmoke(client, app_url, report) {
       on_exam: ({ region_id, exam_id, test }) => {
         if (region_id === "chestAnterior" && exam_id === "auscultation") {
           return {
-            finding: "Irregularly irregular heart sounds; no murmur. Vesicular breath sounds.",
+            finding: "Irregularly irregular heart sounds with a variable first heart sound; no murmur, rub, or gallop. Vesicular breath sounds throughout all zones with no added sounds. Vocal resonance is normal and symmetrical.",
             abnormal: true,
             audio: [
               { label: "Heart sounds", url: "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=" },
               { label: "Breath sounds", url: "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=" },
             ],
+          };
+        }
+        if (region_id === "chestAnterior" && exam_id === "percussion") {
+          // Deliberately longer than the card body so the scroll cue paths
+          // (is-scrollable / is-at-end) are exercised.
+          return {
+            finding: Array.from({ length: 9 }, () =>
+              "Percussion note is resonant throughout all lung zones bilaterally with no areas of dullness or hyper-resonance. Cardiac dullness is present in the normal distribution and is not displaced.").join(" "),
+            abnormal: false,
           };
         }
         if (test) {
@@ -1038,6 +1047,41 @@ async function runSmoke(client, app_url, report) {
     "the finding card to close on Escape",
   );
   report.checks.push("special tests sub-ring navigated (badge, back wedge, Escape layering) and a named test presented its card");
+
+  await client.evaluate(`window.__bound_room.openExamWheel("chestAnterior")`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #exam-layer")?.classList.contains("is-open")`,
+    "the exam wheel for the long-finding check",
+  );
+  await client.evaluate(`document.querySelector('#bound-host [data-exam="percussion"]').click()`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #finding-card")?.classList.contains("is-scrollable")`,
+    "the long finding to raise the scroll cue",
+  );
+  const long_finding_state = await client.evaluate(`(() => {
+    const card = document.querySelector("#bound-host #finding-card");
+    const body = card.querySelector(".finding-card__body");
+    const scrollable_before = card.classList.contains("is-scrollable");
+    const at_end_before = card.classList.contains("is-at-end");
+    body.scrollTop = body.scrollHeight;
+    body.dispatchEvent(new Event("scroll"));
+    return {
+      scrollable_before,
+      at_end_before,
+      at_end_after: card.classList.contains("is-at-end"),
+      body_focusable: body.tabIndex === 0,
+    };
+  })()`);
+  assert.deepEqual(long_finding_state, {
+    scrollable_before: true,
+    at_end_before: false,
+    at_end_after: true,
+    body_focusable: true,
+  }, "A long finding must show the scroll cue and lift it at the end of the text.");
+  await client.evaluate(`document.querySelector("#bound-host #finding-close").click()`);
+  report.checks.push("long findings scroll inside the card with a fade cue that lifts at the end");
 
   await client.evaluate(`(() => {
     window.__bound_room.emphasizeRegion("chestAnterior");

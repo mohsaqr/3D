@@ -802,7 +802,23 @@ export function mountPatientRoom(container, options = {}) {
     exam_elements.card.style.setProperty("--exam-color", techniqueStyle(exam_id).color);
     exam_elements.card.hidden = false;
     exam_elements.card.classList.remove("is-visible");
-    window.requestAnimationFrame(() => exam_elements.card.classList.add("is-visible"));
+    // A finding longer than the body gets a visible cue (faded last lines
+    // + thin scrollbar); the fade lifts at the end of the text. The body is
+    // recreated each render, so the listener never accumulates.
+    const card_body = exam_elements.card.querySelector(".finding-card__body");
+    const updateScrollState = () => {
+      const scrollable = card_body.scrollHeight > card_body.clientHeight + 1;
+      exam_elements.card.classList.toggle("is-scrollable", scrollable);
+      exam_elements.card.classList.toggle(
+        "is-at-end",
+        card_body.scrollTop + card_body.clientHeight >= card_body.scrollHeight - 4,
+      );
+    };
+    card_body.addEventListener("scroll", updateScrollState);
+    window.requestAnimationFrame(() => {
+      exam_elements.card.classList.add("is-visible");
+      updateScrollState();
+    });
     // Auscultation IS listening: its audio starts on its own (the wedge
     // click is the user gesture) until the learner pauses one, which mutes
     // autoplay for the rest of the session.

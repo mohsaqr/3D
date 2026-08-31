@@ -2253,7 +2253,7 @@
   bottom: 24px;
   left: 50%;
   overflow: hidden;
-  width: min(520px, calc(100% - 48px));
+  width: min(640px, calc(100% - 48px));
   border-radius: 11px;
   opacity: 0;
   transform: translate(-50%, 16px) scale(0.98);
@@ -2357,16 +2357,35 @@
 }
 
 .finding-card__body {
-  max-height: 118px;
-  padding: 9px 18px 0;
+  max-height: min(34vh, 320px);
+  padding: 10px 20px 0;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(42, 224, 189, 0.35) transparent;
+}
+
+.finding-card__body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.finding-card__body::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(42, 224, 189, 0.3);
 }
 
 .finding-card__body p {
-  margin: 0 0 13px;
-  color: #cfe2dc;
-  font-size: 11px;
-  line-height: 1.65;
+  margin: 0 0 15px;
+  max-width: 64ch;
+  color: #d7e8e2;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* While more text waits below, the last visible lines fade as the cue;
+   the fade lifts once the reader reaches the end. */
+.finding-card.is-scrollable:not(.is-at-end) .finding-card__body {
+  mask-image: linear-gradient(180deg, #000 72%, rgba(0, 0, 0, 0.15) 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 72%, rgba(0, 0, 0, 0.15) 100%);
 }
 
 .finding-card__error {
@@ -2472,7 +2491,7 @@
   }
 
   .finding-card__body {
-    max-height: 92px;
+    max-height: min(30vh, 220px);
   }
 }
 

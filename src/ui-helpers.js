@@ -588,7 +588,7 @@ export function buildFindingCardMarkup(result) {
       ${result.abnormal ? '<span class="finding-card__flag">▲ Abnormal</span>' : ""}
       <button type="button" class="finding-card__close" id="finding-close" aria-label="Close finding">✕</button>
     </header>
-    <div class="finding-card__body" aria-live="polite">
+    <div class="finding-card__body" aria-live="polite" tabindex="0">
       ${result.error !== undefined
         ? `<p class="finding-card__error">${escapeHtml(result.error)}</p>`
         : `<p>${escapeHtml(result.finding)}</p>`}
