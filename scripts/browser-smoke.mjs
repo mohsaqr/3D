@@ -571,14 +571,14 @@ async function runSmoke(client, app_url, report) {
   await writeFile(PATIENT_SCREENSHOT_PATH, Buffer.from(patient_screenshot.data, "base64"));
   report.checks.push("rigged full-body patient loaded and patient camera evidence was captured");
 
-  await client.evaluate(`document.querySelector("#view-wheel-hub").click()`);
+  await client.evaluate(`document.querySelector("#view-wheel").dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }))`);
   assert.deepEqual(
     await client.evaluate(`({
       open: document.querySelector("#view-wheel")?.classList.contains("is-open"),
       expanded: document.querySelector("#view-wheel-hub")?.getAttribute("aria-expanded"),
     })`),
     { open: true, expanded: "true" },
-    "The view-wheel hub must expand the radial menu.",
+    "Hovering the view wheel must expand the radial menu.",
   );
   await wait(400);
   const wheel_screenshot = await client.send("Page.captureScreenshot", {
@@ -588,6 +588,7 @@ async function runSmoke(client, app_url, report) {
   });
   await writeFile(WHEEL_SCREENSHOT_PATH, Buffer.from(wheel_screenshot.data, "base64"));
   await click(client, '[data-camera="airway"]');
+  await wait(80);
   assert.deepEqual(
     await client.evaluate(`({
       open: document.querySelector("#view-wheel")?.classList.contains("is-open"),
@@ -597,7 +598,30 @@ async function runSmoke(client, app_url, report) {
     { open: false, active: "airway", label: "Airway" },
     "Choosing a wedge must select the view, update the hub, and close the wheel.",
   );
-  report.checks.push("radial view wheel opened, selected a view, and collapsed");
+  await client.evaluate(`document.querySelector("#view-wheel-hub").click()`);
+  assert.deepEqual(
+    await client.evaluate(`({
+      active: document.querySelector("#view-wheel")?.dataset.active,
+      label: document.querySelector("#view-wheel-label")?.textContent,
+    })`),
+    { active: "monitor", label: "Monitor" },
+    "Clicking the central node must navigate to the next view.",
+  );
+  await client.evaluate(`document.querySelector("#view-wheel-hub").click()`);
+  assert.equal(
+    await client.evaluate(`document.querySelector("#view-wheel")?.dataset.active`),
+    "equipment",
+    "Repeated hub clicks must keep cycling the views.",
+  );
+  await client.evaluate(`document.querySelector("#view-wheel").dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }))`);
+  await client.evaluate(`document.querySelector("#view-wheel").dispatchEvent(new PointerEvent("pointerleave", { bubbles: true }))`);
+  await wait(450);
+  assert.equal(
+    await client.evaluate(`document.querySelector("#view-wheel")?.classList.contains("is-open")`),
+    false,
+    "Leaving the wheel must collapse it.",
+  );
+  report.checks.push("view wheel opens on hover, wedges select, and the central node cycles views");
 
   for (const camera of ["monitor", "equipment", "overview"]) {
     await click(client, `[data-camera="${camera}"]`);

@@ -804,22 +804,46 @@ export function mountPatientRoom(container, options = {}) {
   on("[data-category]", (event) => setCategory(event.currentTarget.dataset.category));
   on("[data-action]", (event) => performAction(event.currentTarget.dataset.action));
   const view_wheel = root.querySelector("#view-wheel");
+  const view_wheel_hub = root.querySelector("#view-wheel-hub");
+  let wheel_close_timeout = null;
+  const openWheel = () => {
+    window.clearTimeout(wheel_close_timeout);
+    timers.timeouts.delete(wheel_close_timeout);
+    view_wheel.classList.add("is-open");
+    view_wheel_hub.setAttribute("aria-expanded", "true");
+  };
+  const closeWheel = (delay_ms = 0) => {
+    window.clearTimeout(wheel_close_timeout);
+    timers.timeouts.delete(wheel_close_timeout);
+    wheel_close_timeout = window.setTimeout(() => {
+      timers.timeouts.delete(wheel_close_timeout);
+      view_wheel.classList.remove("is-open");
+      view_wheel_hub.setAttribute("aria-expanded", "false");
+    }, delay_ms);
+    timers.timeouts.add(wheel_close_timeout);
+  };
+  const setActiveView = (view_id) => {
+    const view = CAMERA_VIEWS.find((candidate) => candidate.id === view_id);
+    if (!view) return;
+    root.querySelectorAll("[data-camera]").forEach((camera_button) => {
+      camera_button.classList.toggle("is-active", camera_button.dataset.camera === view.id);
+    });
+    view_wheel.dataset.active = view.id;
+    root.querySelector("#view-wheel-label").textContent = view.label;
+    scene_controller?.focusPreset(view.id);
+  };
   on("[data-camera]", (event) => {
-    root.querySelectorAll("[data-camera]").forEach((camera_button) => camera_button.classList.remove("is-active"));
-    event.currentTarget.classList.add("is-active");
-    scene_controller?.focusPreset(event.currentTarget.dataset.camera);
-    const view = CAMERA_VIEWS.find((candidate) => candidate.id === event.currentTarget.dataset.camera);
-    if (view) {
-      view_wheel.dataset.active = view.id;
-      root.querySelector("#view-wheel-label").textContent = view.label;
-    }
-    view_wheel.classList.remove("is-open");
-    root.querySelector("#view-wheel-hub").setAttribute("aria-expanded", "false");
+    setActiveView(event.currentTarget.dataset.camera);
+    closeWheel();
   });
-  root.querySelector("#view-wheel-hub").addEventListener("click", (event) => {
-    const open = view_wheel.classList.toggle("is-open");
-    event.currentTarget.setAttribute("aria-expanded", String(open));
+  // The central node navigates: each click advances to the next view.
+  // The full wheel opens on hover for direct picking.
+  view_wheel_hub.addEventListener("click", () => {
+    const current_index = CAMERA_VIEWS.findIndex((candidate) => candidate.id === view_wheel.dataset.active);
+    setActiveView(CAMERA_VIEWS[(current_index + 1) % CAMERA_VIEWS.length].id);
   });
+  view_wheel.addEventListener("pointerenter", openWheel);
+  view_wheel.addEventListener("pointerleave", () => closeWheel(280));
 
   root.querySelector("#begin-button")?.addEventListener("click", () => {
     monitor_audio.enable();

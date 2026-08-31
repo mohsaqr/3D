@@ -309,7 +309,7 @@ export function buildViewWheelMarkup(views) {
   return `
     <svg class="view-wheel__rims" viewBox="0 0 ${size} ${size}" aria-hidden="true">${rim_paths.join("")}</svg>
     ${wedges.join("")}
-    <button type="button" class="view-wheel__hub" id="view-wheel-hub" aria-expanded="false" aria-label="Choose camera view">
+    <button type="button" class="view-wheel__hub" id="view-wheel-hub" aria-expanded="false" aria-label="Next camera view">
       <small>VIEW</small>
       <strong id="view-wheel-label">${views[0].label}</strong>
     </button>`;
