@@ -635,6 +635,7 @@ async function runSmoke(client, app_url, report) {
     const room = mountPatientRoom(host, {
       mode: "bound",
       waveform: "host",
+      chrome: "room",
       patient: {
         name: "Aino Testinen",
         initials: "AT",
@@ -691,6 +692,8 @@ async function runSmoke(client, app_url, report) {
       has_scene_labels: Boolean(host.querySelector(".scene-label")),
       has_monitor_panel: Boolean(host.querySelector(".monitor-panel")),
       has_camera_controls: Boolean(host.querySelector(".camera-controls")),
+      has_brand: Boolean(host.querySelector(".brand")),
+      case_heading_present: Boolean(host.querySelector(".case-heading h1")),
       caption_hidden: host.querySelector("#patient-caption")?.hidden,
       status_event_emitted: events.some((event) => event.type === "status"),
       host_canvas: room.ecg_canvas instanceof HTMLCanvasElement,
@@ -713,6 +716,8 @@ async function runSmoke(client, app_url, report) {
     has_scene_labels: false,
     has_monitor_panel: true,
     has_camera_controls: true,
+    has_brand: false,
+    case_heading_present: true,
     caption_hidden: true,
     status_event_emitted: true,
     host_canvas: true,

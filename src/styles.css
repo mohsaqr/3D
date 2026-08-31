@@ -1856,3 +1856,13 @@
   opacity: 0.45;
   cursor: default;
 }
+
+/* chrome: "room" — the host application provides its own brand chrome. */
+.simulator--embedded .topbar {
+  grid-template-columns: minmax(260px, 1fr) auto;
+}
+
+.simulator--embedded .case-heading {
+  padding-left: 0;
+  border-left: 0;
+}

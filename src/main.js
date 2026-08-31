@@ -166,14 +166,17 @@ export function uiIcon(name) {
  *   (brief, objectives, action dock, score, pause) because the host drives the case.
  * @param {"internal"|"host"} [waveform] "host" renders an empty ECG canvas the
  *   host application draws its own signal into, instead of the built-in SVG wave.
- * @param {{records?: boolean, treatments?: boolean}} [features] Which host-fed
- *   panels (medical records, treatment ordering) to render entry points for.
+ * @param {{records?: boolean, treatments?: boolean, slim_chrome?: boolean}} [features]
+ *   Which host-fed panels (medical records, treatment ordering) to render entry
+ *   points for; slim_chrome drops the room's own brand block for hosts that
+ *   provide their own application chrome.
  * @return {string} HTML markup.
  * @example
  * buildAppMarkup(groupActions());
  */
 export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode = "standalone", waveform = "internal", features = {}) {
   const bound = mode === "bound";
+  const slim = Boolean(features.slim_chrome);
   const action_markup = Object.entries(grouped_actions)
     .map(([category, actions]) => {
       const buttons = actions
@@ -192,7 +195,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
     .join("");
 
   return `
-    <main class="simulator${bound ? " simulator--bound" : ""}" data-status="critical">
+    <main class="simulator${bound ? " simulator--bound" : ""}${slim ? " simulator--embedded" : ""}" data-status="critical">
       <section class="stage" aria-label="3D patient room">
         <div class="stage__canvas" id="scene-root"></div>
         <div class="stage__wash" aria-hidden="true"></div>
@@ -206,10 +209,10 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         </div>
 
         <header class="topbar">
-          <span class="brand" aria-label="Rohy lab">
+          ${slim ? "" : `<span class="brand" aria-label="Rohy lab">
             <span class="brand__mark"><i></i><i></i><i></i></span>
             <span>rohy<sup>lab</sup></span>
-          </span>
+          </span>`}
           <div class="case-heading">
             <span class="eyebrow">${patient.location}</span>
             <h1>${patient.case_title}</h1>
@@ -414,8 +417,13 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
  *   patient?: Partial<typeof DEFAULT_PATIENT>,
  *   avatar_url?: string,
  *   mode?: "standalone"|"bound",
+ *   waveform?: "internal"|"host",
+ *   chrome?: "full"|"room",
+ *   records?: Array<object>,
+ *   treatments?: {available?: Array<object>},
  *   on_event?: (event: object) => void,
- * }} [options] Mount configuration.
+ * }} [options] Mount configuration. chrome: "room" drops the room's own brand
+ *   block for hosts that render it inside their own application chrome.
  * @return {{
  *   dispose: () => void,
  *   update: (vitals: object, status: string|null, elapsed_seconds: number) => void,
@@ -440,6 +448,10 @@ export function mountPatientRoom(container, options = {}) {
   if (!["internal", "host"].includes(waveform)) {
     throw new Error(`Unknown waveform mode: ${waveform}`);
   }
+  const chrome = options.chrome ?? "full";
+  if (!["full", "room"].includes(chrome)) {
+    throw new Error(`Unknown chrome mode: ${chrome}`);
+  }
   if (options.on_event !== undefined && typeof options.on_event !== "function") {
     throw new Error("options.on_event must be a function.");
   }
@@ -458,6 +470,7 @@ export function mountPatientRoom(container, options = {}) {
   const features = {
     records: options.records !== undefined,
     treatments: options.treatments !== undefined,
+    slim_chrome: chrome === "room",
   };
   let available_treatments = options.treatments?.available ?? [];
   let active_treatments = [];
