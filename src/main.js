@@ -1696,6 +1696,15 @@ export function mountPatientRoom(container, options = {}) {
       return true;
     },
     closeExamWheel,
+    // Hand the navigation wheel to the other edge. A host that docks a
+    // working surface on the left calls this so the wheel is not buried
+    // under it; passing "left" gives the side back.
+    setNavSide(side) {
+      if (!["left", "right"].includes(side)) {
+        throw new Error(`Unknown navigation side: ${side}`);
+      }
+      view_wheel.dataset.side = side;
+    },
     getExamLog() {
       return [...exam_log.values()].map((entry) => ({ ...entry }));
     },

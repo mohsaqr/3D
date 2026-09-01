@@ -1375,6 +1375,32 @@ async function runSmoke(client, app_url, report) {
   assert.equal(monitor_drag.inside, true, "A dragged panel must stay on the stage.");
   report.checks.push("monitor panel drags by its header and stays on the stage");
 
+  // A host that docks a working surface on the left can hand that side to
+  // its own panel; navigation steps across instead of hiding underneath.
+  const wheelLeft = () => client.evaluate(
+    `Math.round(document.querySelector("#bound-host #view-wheel").getBoundingClientRect().left)`,
+  );
+  const nav_at_rest = await wheelLeft();
+  await client.evaluate(`window.__bound_room.setNavSide("right")`);
+  // The move is animated, so measure once it has settled.
+  await wait(400);
+  const nav_handed_over = await wheelLeft();
+  assert.ok(
+    nav_handed_over > nav_at_rest + 400,
+    `setNavSide("right") must move the wheel across: ${nav_at_rest} -> ${nav_handed_over}`,
+  );
+  await client.evaluate(`window.__bound_room.setNavSide("left")`);
+  await wait(400);
+  assert.equal(await wheelLeft(), nav_at_rest, "Giving the side back returns the wheel.");
+  assert.equal(
+    await client.evaluate(`(() => {
+      try { window.__bound_room.setNavSide("middle"); return false; } catch { return true; }
+    })()`),
+    true,
+    "An unknown side must be refused, not guessed.",
+  );
+  report.checks.push("navigation wheel hands its side over and takes it back");
+
   const disposed_clean = await client.evaluate(`(() => {
     const host = document.querySelector("#bound-host");
     window.__bound_room.dispose();

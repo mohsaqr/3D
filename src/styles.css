@@ -754,6 +754,19 @@
   height: 300px;
   pointer-events: none;
   transform: translateY(-50%);
+  transition: left 260ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+/* The host can hand this side over — when a working surface docks left,
+   navigation steps across rather than being buried under it. */
+.view-wheel[data-side="right"] {
+  left: calc(100% - 322px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-wheel {
+    transition: none;
+  }
 }
 
 .view-wheel.is-open {
