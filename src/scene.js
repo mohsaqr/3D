@@ -5,6 +5,7 @@ import { clone as cloneSkeleton } from "three/addons/utils/SkeletonUtils.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RectAreaLightUniformsLib } from "three/addons/lights/RectAreaLightUniformsLib.js";
+import { VISEME_KEYS, SPEAKING_VISEME_KEYS } from "./visemes.js";
 
 const DEFAULT_PATIENT_AVATAR_URL = "/avatars/avatarsdk.glb";
 
@@ -678,6 +679,33 @@ export function updateRiggedPatient(rig, status, vitals, elapsed_seconds) {
 
   const blink = elapsed_seconds % 4.6 < 0.13 ? 1 : 0;
   const mouth_open = (0.035 + Math.max(0, breath_wave) * 0.05) * effort;
+
+  // Lipsync easing rates, PORTED FROM Rohy's PatientAvatar morph driver
+  // (asymmetric on purpose: a mouth opens faster than it closes). Rohy runs
+  // inside react-three-fiber's useFrame and is handed a delta; this room's
+  // avatar update takes scenario time only, so the frame delta is measured
+  // here and clamped so a backgrounded tab cannot jump the mouth.
+  const now_ms = performance.now();
+  const frame_delta = rig.last_viseme_ms
+    ? Math.min(0.1, (now_ms - rig.last_viseme_ms) / 1000)
+    : 0.016;
+  rig.last_viseme_ms = now_ms;
+  const rise = 12 * frame_delta;
+  const decay = 8 * frame_delta;
+  const visemes = rig.visemes ?? null;
+  // How much of a sound is being formed right now, eased the same way the
+  // individual morphs are. Drives two things: it suppresses the breathing
+  // jaw drive so the two do not fight over the same morph, and on a rig with
+  // no viseme morphs at all it still opens the jaw so the patient is visibly
+  // talking rather than silently staring.
+  const speech_target = visemes
+    ? SPEAKING_VISEME_KEYS.reduce((peak, key) => Math.max(peak, visemes[key] || 0), 0)
+    : 0;
+  const previous_speech = rig.speech_energy ?? 0;
+  rig.speech_energy = speech_target > previous_speech
+    ? Math.min(speech_target, previous_speech + rise)
+    : Math.max(speech_target, previous_speech - decay);
+  const speech_energy = rig.speech_energy;
   // One-shot reaction envelope (set by reactPatient): a sharp wince that
   // decays over ~1.4 s, layered on top of the ambient blink/breathing drive.
   let wince = 0;
@@ -696,9 +724,34 @@ export function updateRiggedPatient(rig, status, vitals, elapsed_seconds) {
       const index = dictionary?.[name];
       if (index != null) influences[index] = Math.max(blink, wince * 0.85);
     });
-    ["jawOpen", "mouthOpen", "viseme_O"].forEach((name) => {
+    // Lipsync, PORTED FROM Rohy's PatientAvatar: ease every viseme morph
+    // toward the live target in place (the renderer reads the influences
+    // array by reference each frame), rising faster than it falls.
+    const has_viseme_morphs = SPEAKING_VISEME_KEYS.some((name) => dictionary?.[name] != null);
+    // Runs every frame, silence included — as Rohy's does. Guarding it on
+    // "there are visemes" would leave the last shape frozen on the face when
+    // the voice stops, instead of easing the mouth closed.
+    const viseme_targets = visemes ?? {};
+    VISEME_KEYS.forEach((name) => {
       const index = dictionary?.[name];
-      if (index != null) influences[index] = Math.min(1, mouth_open + wince * 0.3);
+      if (index == null) return;
+      const want = viseme_targets[name] || 0;
+      const current = influences[index];
+      influences[index] = want > current
+        ? Math.min(want, current + rise)
+        : Math.max(want, current - decay);
+    });
+    // The breathing jaw yields to speech rather than adding to it. A rig
+    // without viseme morphs borrows the speech envelope so its jaw still
+    // moves in time with the voice.
+    const speech_jaw = has_viseme_morphs ? 0 : speech_energy * 0.45;
+    ["jawOpen", "mouthOpen"].forEach((name) => {
+      const index = dictionary?.[name];
+      if (index == null) return;
+      influences[index] = Math.min(
+        1,
+        mouth_open * (1 - speech_energy) + speech_jaw + wince * 0.3,
+      );
     });
     ["mouthFrownLeft", "mouthFrownRight", "browDownLeft", "browDownRight"].forEach((name) => {
       const index = dictionary?.[name];
@@ -1231,6 +1284,19 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
     markRegion(region_id, mark) {
       const collider = regionColliders()?.find((candidate) => candidate.userData.interactive.id === region_id);
       if (collider) setColliderMark(collider, mark);
+    },
+    // Live mouth shapes while the patient speaks. The map is whatever the
+    // host's TTS emits — Rohy sends the same {viseme_aa: 0.6, …} objects it
+    // feeds its own avatar, so one voice stream drives both faces. Pass null
+    // (or {viseme_sil: 1}) when the voice stops.
+    setVisemes(map) {
+      if (map !== null && (typeof map !== "object" || Array.isArray(map))) {
+        throw new Error("visemes must be an object of viseme weights, or null.");
+      }
+      const rig = room.getObjectByName("patient-avatar")?.userData.avatar_rig;
+      if (rig) {
+        rig.visemes = map;
+      }
     },
     // One-shot facial reaction on the rigged patient (currently: "wince").
     reactPatient(kind) {

@@ -1695,6 +1695,13 @@ export function mountPatientRoom(container, options = {}) {
     react(kind) {
       scene_controller?.reactPatient(kind);
     },
+    // Drive the patient's mouth from the host's own voice stream. The host
+    // already has viseme weights if it speaks through a TTS that emits them;
+    // handing them here means one voice moves one mouth, rather than the
+    // room inventing a talking animation of its own. null when silent.
+    setVisemes(map) {
+      scene_controller?.setVisemes(map);
+    },
     // Open the exam wheel programmatically (e.g. from a host body map); with
     // no point it centers on the stage. Returns false for a region without
     // exams. closeExamWheel folds it; getExamLog lists performed exams.

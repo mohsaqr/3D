@@ -588,7 +588,8 @@ test("updateRiggedPatient applies status-specific breathing, effort, and complex
     assertQuaternionClose(rig.right_shoulder.quaternion, expected_right_shoulder);
     assert.deepEqual(
       rig.morph_targets[0].morphTargetInfluences,
-      [0, 0, 0, 0.085 * clinical_case.effort, 0.085 * clinical_case.effort, 0.085 * clinical_case.effort],
+      // Index 5 is viseme_O — a speech morph, at rest unless a voice drives it.
+      [0, 0, 0, 0.085 * clinical_case.effort, 0.085 * clinical_case.effort, 0],
     );
 
     const expected_color = base_color.clone().lerp(
@@ -617,9 +618,13 @@ test("updateRiggedPatient drives all known blink and mouth aliases and restores 
 
   updateRiggedPatient(rig, "unknown", { respiratory_rate: 30 }, 0);
   assert.deepEqual(rig.morph_targets[0].morphTargetInfluences.slice(0, 3), [1, 1, 1]);
-  rig.morph_targets[0].morphTargetInfluences.slice(3).forEach((influence) => {
+  // jawOpen + mouthOpen ride the breath. viseme_O does NOT: it is a speech
+  // morph, and letting breathing hold it open would fight the lipsync for
+  // the same influence every frame. It stays at rest until a voice drives it.
+  rig.morph_targets[0].morphTargetInfluences.slice(3, 5).forEach((influence) => {
     assert.ok(Math.abs(influence - 0.0098) < 1e-12);
   });
+  assert.equal(rig.morph_targets[0].morphTargetInfluences[5], 0);
   assertColorClose(
     skin.material.color,
     base_color.clone().lerp(new THREE.Color(0xe0d1c7), 0.12),
@@ -632,6 +637,59 @@ test("updateRiggedPatient drives all known blink and mouth aliases and restores 
   assert.deepEqual(
     rig.morph_targets[0].morphTargetInfluences.slice(0, 3),
     [0, 0, 0],
+  );
+});
+
+test("updateRiggedPatient eases the mouth through the host's viseme stream", () => {
+  const rig = createSyntheticAnimationRig();
+  const influences = rig.morph_targets[0].morphTargetInfluences;
+
+  // A voice is speaking an "O". The morph rises toward it rather than
+  // snapping — a mouth that teleports between shapes reads as a glitch.
+  rig.visemes = { viseme_O: 1 };
+  updateRiggedPatient(rig, "stable", { respiratory_rate: 16 }, 0);
+  const first = influences[5];
+  assert.ok(first > 0, "the viseme morph must start opening");
+  assert.ok(first < 1, "and must not jump straight to the target");
+
+  updateRiggedPatient(rig, "stable", { respiratory_rate: 16 }, 0.1);
+  assert.ok(influences[5] > first, "it keeps rising while the sound holds");
+
+  // Speech owns the mouth while it lasts: the breathing jaw drive yields
+  // instead of stacking on top of it. Compared against an identical rig
+  // breathing at the same rate through the same instants, silently.
+  const silent = createSyntheticAnimationRig();
+  updateRiggedPatient(silent, "stable", { respiratory_rate: 16 }, 0);
+  updateRiggedPatient(silent, "stable", { respiratory_rate: 16 }, 0.1);
+  assert.ok(
+    influences[3] < silent.morph_targets[0].morphTargetInfluences[3],
+    "the breathing jaw must yield to speech rather than stack with it",
+  );
+
+  // Silence closes it again, and more slowly than it opened.
+  rig.visemes = null;
+  const before_closing = influences[5];
+  updateRiggedPatient(rig, "stable", { respiratory_rate: 16 }, 0.2);
+  assert.ok(influences[5] < before_closing, "the mouth closes when the voice stops");
+});
+
+test("updateRiggedPatient still moves a jaw on a rig with no viseme morphs", () => {
+  // Not every avatar ships the 15 Oculus visemes. One with only a jaw must
+  // still be visibly talking rather than staring silently through a reply.
+  const rig = createSyntheticAnimationRig();
+  const mesh = rig.morph_targets[0];
+  mesh.morphTargetDictionary = { jawOpen: 0 };
+  mesh.morphTargetInfluences = [0];
+
+  updateRiggedPatient(rig, "stable", { respiratory_rate: 16 }, 0);
+  const resting = mesh.morphTargetInfluences[0];
+
+  rig.visemes = { viseme_aa: 1 };
+  updateRiggedPatient(rig, "stable", { respiratory_rate: 16 }, 0.1);
+  updateRiggedPatient(rig, "stable", { respiratory_rate: 16 }, 0.2);
+  assert.ok(
+    mesh.morphTargetInfluences[0] > resting,
+    "the speech envelope must open a viseme-less jaw",
   );
 });
 
@@ -828,9 +886,11 @@ test("updateClinicalScene dispatches physiology to a rigged patient", () => {
   assert.ok(rig.spine.scale.x > rig.spine_rest_scale.x);
   assert.ok(rig.spine.scale.z > rig.spine_rest_scale.z);
   assert.deepEqual(rig.morph_targets[0].morphTargetInfluences.slice(0, 3), [0, 0, 0]);
-  rig.morph_targets[0].morphTargetInfluences.slice(3).forEach((influence) => {
+  // jawOpen + mouthOpen only; viseme_O belongs to the voice, not the breath.
+  rig.morph_targets[0].morphTargetInfluences.slice(3, 5).forEach((influence) => {
     assert.ok(Math.abs(influence - 0.085) < 1e-12);
   });
+  assert.equal(rig.morph_targets[0].morphTargetInfluences[5], 0);
   assert.equal(
     room.getObjectByName("monitor-status-led").material.color.getHex(),
     0xff725e,

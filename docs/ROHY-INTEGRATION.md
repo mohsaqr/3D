@@ -244,6 +244,135 @@ view of it; the Phase A hidden-mount bridge is deleted; every room gets live
 vitals. Highest-risk refactor (PatientMonitor is ~1800 lines with admin
 editing intertwined) — its 17 tests must stay green; provider gets its own.
 
+### Decision (user, 2026-09-01): the 2D examination room is demoted, not deleted
+"The examination room can be introductory screen or an extra one. I don't want
+any re-invention of the wheel."
+
+Two things follow:
+
+1. **End state**: the 3D room is the examination experience; the existing 2D
+   examination room stays as an introduction (first-visit orientation) or
+   simply as an extra room. Nothing about it gets rebuilt or removed — Phase D
+   is a navigator ordering/label change, not a rewrite. It stays one line in
+   `PLUGIN_ROOMS` / `RoomNavigator` whenever the testing constraint lifts.
+2. **Standing rule — no duplicated implementations.** Acted on 2026-09-01 by
+   collapsing the two the plugin still carried:
+   - `useExamPerformer.js` (plugin) was a parallel copy of
+     ManikinPanel.handleExamTypeSelect — and had already drifted: it wrote the
+     `"<test>: <finding>"` string into the patient record where ManikinPanel
+     writes the raw finding. Now one hook, `src/hooks/usePhysicalExam.js`,
+     extracted out of ManikinPanel and used by both rooms; the plugin copy is
+     deleted. EventLogger stays with the screen in both cases, so the `room3d`
+     marker still tells the rooms apart.
+   - `plugins/room3d/ecgWaveform.js` held a verbatim copy of PatientMonitor's
+     `gaussMs`/`cardiacIntervals`/`GenerateECGRaw`. The generator now lives in
+     `src/services/ecgWaveform.js`; PatientMonitor imports it (its 17 tests
+     pass unchanged) and the plugin keeps only the sampler.
+
+### Phase VOICE-V2 — The learner talks to the patient — **IMPLEMENTED 2026-09-01** (plugin worktree only, uncommitted by user rule)
+"I need microphone controls on the 3D room and talks." This is V2 of the
+voice plan (`rohy-3d-plugin/tmp/voice-plan.html`), built as connection rather
+than construction — every piece of the turn already existed in Rohy:
+
+| Need | Reused, not written |
+|---|---|
+| Microphone + recogniser lifecycle | `components/discussion/VoiceControl.jsx` (three additive props; six characterization tests pin the debrief behaviour first) |
+| Who the patient is | `utils/lastPatientPrompt` — the exact prompt ChatInterface assembles, which it pre-warms on every case change and which stays warm because ChatInterface is still mounted (hidden + inert) under the room |
+| The conversation so far | `GET /interactions/:sessionId` — the session's real patient thread; `LLMService.streamMessage` persists both sides, so a room question lands in the educator's transcript |
+| Sentence-at-a-time speech | `VoiceService.beginSpeechSession` + `utils/sentenceSplit` — the chat's own low-latency path |
+| Captions | `components/voice/SubtitleBand` + `useSubtitleReveal` |
+| Language | `sttLocaleFor(case language)` — an Italian session is spoken and heard in Italian |
+
+New plugin code is only the two joins: `useRoomConversation.js` (the turn)
+and a `beginSession()` on `usePatientVoice.js` so scripted lines and streamed
+replies share one resolver and one audio path.
+
+Three decisions worth keeping:
+
+1. **The room refuses to invent a persona.** The cached prompt is checked
+   against the case in focus; a mismatch (or an empty cache) means the room
+   says it is not ready, rather than asking the model to improvise a patient.
+   Same stance the voice resolver takes about substituting voices.
+2. **The space bar is shielded, not merely used.** ChatInterface's own
+   window-level space-bar voice turn is still live underneath. The room's
+   listener is on the **capture** phase and stops propagation, so one press
+   opens one microphone. Pinned by a test with a stand-in chat listener that
+   fails if the listener is moved to the bubble phase.
+3. **Barge-in is a prop, not a fork.** `onInterrupt` makes the mic outrank
+   the patient's sentence in the room; the debrief passes nothing and keeps
+   letting the discussant finish.
+
+Verified: 1614 client tests pass (150 files), production build clean, both
+sabotage checks (persona guard, capture-phase shield) fail the right tests.
+Not verified: a live microphone — that needs a real browser with a granted
+permission and a logged-in session.
+
+Still open — V3: audio arbitration between speech, stethoscope clips and
+alarms. A clip started by hand can still overlap a spoken line.
+
+### Phase VOICE-LIPS — The patient's mouth moves — **IMPLEMENTED 2026-09-01** (package committed)
+"and lips dont move" — and they could not have: the room's avatar drove
+`jawOpen` / `mouthOpen` / `viseme_O` from the **breathing envelope alone**.
+There was no viseme input in the package at all.
+
+Per the standing rule ("no re-invention of the wheel"), the driver is PORTED
+from Rohy's `PatientAvatar` rather than invented:
+
+- `src/visemes.js` — `VISEME_KEYS` vendored from Rohy's `utils/visemes.js`,
+  byte-for-byte and with provenance, because the same TTS stream drives both
+  faces and the order must not be re-derived.
+- `updateRiggedPatient` eases each viseme morph in place with Rohy's own
+  asymmetric rates (rise `12·delta`, decay `8·delta` — a mouth opens faster
+  than it closes). Rohy gets its delta from `useFrame`; this room's avatar
+  update takes scenario time only, so the frame delta is measured on the rig
+  and clamped so a backgrounded tab cannot jump the mouth.
+- `controller.setVisemes(map)` is the new public API; `usePatientVoice` emits
+  every map to BOTH VoiceContext (Rohy's avatar) and the room, through a ref
+  rather than React state — visemes arrive at frame rate and a render each
+  would re-render the whole room while the patient talks.
+
+Two necessary modifications, both deliberate:
+
+1. **`viseme_O` left the breathing drive.** It is a speech morph; letting the
+   breath hold it at 0.0098 would fight the lipsync for the same influence
+   every frame. Two existing package tests asserted the old behaviour and
+   were updated with the reasoning inline.
+2. **Rigs without viseme morphs still move.** Not every avatar ships the 15
+   Oculus visemes; on those, the eased speech envelope opens `jawOpen`, so
+   the patient is visibly talking rather than staring through a reply.
+
+A test caught a real bug during the port: guarding the easing loop on "there
+are visemes" left the last mouth shape frozen on the face when the voice
+stopped. Rohy runs the loop every frame, silence included — so does this now.
+
+Verified: 109 package tests, browser smoke passes, 1621 client tests.
+Package `0.3.0` → `0.4.0`.
+
+### Phase VOICE-PERSONA — The room resolves the patient's own voice — **IMPLEMENTED 2026-09-01** (plugin worktree only)
+"It is just using the woman voice..." The room called Rohy's `resolveVoice`
+but passed only 2 of its 3 tiers. The persona tier — the Patient template's
+configured voice — was applied by a `resolveSpeakerVoice` wrapper *inside
+ChatInterface*, so the room fell straight through to the platform's
+per-language default, `af_bella`, for every case with no explicit voice.
+That default is female, so male patients spoke in a woman's voice while the
+chat room, using the wrapper, was correct.
+
+Reuse per the standing rule: the template resolution (per-case attached
+agent → platform default matched on the case's gender) was extracted
+VERBATIM out of ChatInterface's agents loader into
+`src/utils/patientTemplate.js`, with 9 characterization tests written first.
+ChatInterface now calls the extraction, so the rooms cannot drift. The
+room's new `usePatientTemplate` resolves the same persona from the same
+session agents, and `usePatientVoice` passes `templateVoice` through.
+
+The extracted resolver's deliberate asymmetry is now pinned rather than
+looking like an oversight: a female-coded case with only male templates
+seeded resolves to **null** — a visible misconfig — instead of silently
+speaking as a man.
+
+Verified against the seeded database: "Default Patient" (male, `am_michael`)
+and "Default Female Patient" (female, `af_bella`). 1631 client tests pass.
+
 ### Phase D — Replacement and polish (only after the user lifts the additive constraint)
 With the user's explicit go-ahead after their testing: point the
 `examination` key at `Exam3DScreen` (or merge the rooms), retire the 2D
