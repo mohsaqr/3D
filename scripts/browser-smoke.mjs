@@ -790,6 +790,10 @@ async function runSmoke(client, app_url, report) {
         }
         return { finding: "No abnormality detected on " + exam_id + ".", abnormal: false };
       },
+      nav_actions: [
+        { id: "examine", label: "Examine", hint: "Body regions", color: "#7ee0c0" },
+        { id: "records", label: "Records", hint: "Chart", color: "#ffb84a" },
+      ],
       on_event: (event) => events.push(event),
     });
     window.__bound_room = room;
@@ -1294,6 +1298,10 @@ async function runSmoke(client, app_url, report) {
         exams: [{ id: "palpation", label: "Palpate", hint: "Feel" }],
       }],
       on_exam: () => ({ finding: "Soft and non-tender.", abnormal: false }),
+      nav_actions: [
+        { id: "examine", label: "Examine", hint: "Body regions", color: "#7ee0c0" },
+        { id: "records", label: "Records", hint: "Chart", color: "#ffb84a" },
+      ],
       on_event: (event) => events.push(event),
     });
     room.openExamWheel("abdomen");
@@ -1315,6 +1323,58 @@ async function runSmoke(client, app_url, report) {
   }, 'findings: "host" must suppress the room card while still performing and reporting the exam.');
   report.checks.push('findings: "host" suppresses the room finding card while exams still perform, log, and emit');
 
+  // The wheel is a navigator, not a camera stepper: destinations sit on it
+  // beside the views, and "examine" opens the examination wheel itself.
+  const nav_state = await client.evaluate(`(() => {
+    const host = document.querySelector("#bound-host");
+    return {
+      views: host.querySelectorAll("[data-camera]").length,
+      destinations: [...host.querySelectorAll("[data-nav]")].map((node) => node.dataset.nav),
+    };
+  })()`);
+  assert.deepEqual(nav_state, { views: 5, destinations: ["examine", "records"] },
+    "The navigation wheel must carry destinations beside the camera views.");
+
+  await client.evaluate(`document.querySelector('#bound-host [data-nav="records"]').click()`);
+  assert.equal(
+    await client.evaluate(`window.__bound_events.some((event) => event.type === "nav" && event.id === "records")`),
+    true,
+    "A destination wedge must report itself so the host can open it.",
+  );
+
+  await client.evaluate(`document.querySelector('#bound-host [data-nav="examine"]').click()`);
+  await waitForCondition(
+    client,
+    `document.querySelector("#bound-host #exam-layer")?.classList.contains("is-open")`,
+    "the examination wheel opened from the navigation wheel",
+  );
+  await client.evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+  report.checks.push("navigation wheel carries destinations and opens the examination wheel");
+
+  // The monitor can be moved out of the way and stays where it is put.
+  const monitor_drag = await client.evaluate(`(() => {
+    const host = document.querySelector("#bound-host");
+    const panel = host.querySelector(".monitor-panel");
+    const handle = host.querySelector(".monitor-header");
+    const before = panel.getBoundingClientRect().left;
+    const box = handle.getBoundingClientRect();
+    const press = (type, x, y) => handle.dispatchEvent(new PointerEvent(type, {
+      pointerId: 7, clientX: x, clientY: y, bubbles: true, cancelable: true,
+    }));
+    press("pointerdown", box.left + 20, box.top + 10);
+    press("pointermove", box.left - 260, box.top + 120);
+    press("pointerup", box.left - 260, box.top + 120);
+    return {
+      moved_left: Math.round(panel.getBoundingClientRect().left),
+      before: Math.round(before),
+      inside: panel.getBoundingClientRect().left >= host.getBoundingClientRect().left - 1,
+    };
+  })()`);
+  assert.ok(monitor_drag.moved_left < monitor_drag.before - 100,
+    `Dragging the monitor header must move the panel: ${JSON.stringify(monitor_drag)}`);
+  assert.equal(monitor_drag.inside, true, "A dragged panel must stay on the stage.");
+  report.checks.push("monitor panel drags by its header and stays on the stage");
+
   const disposed_clean = await client.evaluate(`(() => {
     const host = document.querySelector("#bound-host");
     window.__bound_room.dispose();
@@ -1324,6 +1384,7 @@ async function runSmoke(client, app_url, report) {
     return clean;
   })()`);
   assert.equal(disposed_clean, true, "Bound-mode dispose must leave the host element empty.");
+
   report.checks.push("bound mode kept only live-data chrome (no demo controls, labels, or parked caption), mirrored rhythm and ECG canvas, said a line on demand, and disposed cleanly");
 
   await wait(150);

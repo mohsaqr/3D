@@ -526,6 +526,23 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* A panel header doubles as its drag handle. */
+.is-draggable {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.is-draggable:active {
+  cursor: grabbing;
+}
+
+/* Once moved, the panel owns its position instead of its CSS corner. */
+.monitor-panel.is-moved {
+  right: auto;
+  bottom: auto;
+}
+
 .monitor-header div {
   display: flex;
   gap: 8px;

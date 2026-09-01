@@ -206,7 +206,7 @@ export function uiIcon(name) {
  * @example
  * buildAppMarkup(groupActions());
  */
-export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode = "standalone", waveform = "internal", features = {}) {
+export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode = "standalone", waveform = "internal", features = {}, nav_actions = []) {
   const bound = mode === "bound";
   const slim = Boolean(features.slim_chrome);
   const action_markup = Object.entries(grouped_actions)
@@ -319,7 +319,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <div class="region-hover-label" id="region-hover-label" hidden></div>
 
         <div class="view-wheel" id="view-wheel" data-active="overview" aria-label="Camera views">
-          ${buildViewWheelMarkup(CAMERA_VIEWS)}
+          ${buildViewWheelMarkup(CAMERA_VIEWS, nav_actions)}
         </div>
 
         ${features.exam ? `
@@ -562,6 +562,18 @@ export function mountPatientRoom(container, options = {}) {
   if (options.on_exam !== undefined && typeof options.on_exam !== "function") {
     throw new Error("options.on_exam must be a function.");
   }
+  // Destinations the host adds to the navigation wheel beside the camera
+  // views — examine, records, the body map. Chosen, never stepped onto.
+  const nav_actions = options.nav_actions ?? [];
+  if (!Array.isArray(nav_actions) || nav_actions.length + CAMERA_VIEWS.length > 8) {
+    throw new Error("options.nav_actions must be an array leaving 8 wedges or fewer in total.");
+  }
+  nav_actions.forEach((action) => {
+    if ([action?.id, action?.label, action?.hint, action?.color]
+      .some((value) => typeof value !== "string" || value.length === 0)) {
+      throw new Error("every nav action needs id, label, hint, and color strings.");
+    }
+  });
   const findings = options.findings ?? "internal";
   if (!["internal", "host"].includes(findings)) {
     throw new Error(`Unknown findings mode: ${findings}`);
@@ -581,7 +593,7 @@ export function mountPatientRoom(container, options = {}) {
   let active_treatments = [];
 
   container.classList.add("rohy3d-root");
-  container.innerHTML = buildAppMarkup(groupActions(), patient, mode, waveform, features);
+  container.innerHTML = buildAppMarkup(groupActions(), patient, mode, waveform, features, nav_actions);
   const root = container;
 
   let state = createSimulation({
@@ -1341,6 +1353,18 @@ export function mountPatientRoom(container, options = {}) {
     setActiveView(event.currentTarget.dataset.camera);
     closeWheel();
   });
+  // A destination is not a camera move: report it and let the host (or the
+  // room itself, for "examine") decide what opening it means.
+  on("[data-nav]", (event) => {
+    const nav_id = event.currentTarget.dataset.nav;
+    closeWheel();
+    if (nav_id === "examine") {
+      const [first] = exam_regions.values();
+      if (first) openExamWheelFor(first, null, "nav");
+      return;
+    }
+    emit({ type: "nav", id: nav_id });
+  });
   // The central node navigates: each click advances to the next view.
   // The full wheel opens on hover for direct picking.
   view_wheel_hub.addEventListener("click", () => {
@@ -1522,6 +1546,63 @@ export function mountPatientRoom(container, options = {}) {
     // control there and never creates an AudioContext.
     heartbeatLoop();
   }
+
+
+  /**
+   * Let a panel be dragged by a handle and stay where it is put.
+   *
+   * Panels are anchored to a corner by CSS; the first drag converts that to
+   * explicit left/top so it can move, and every drag is clamped so the panel
+   * cannot be lost off the stage.
+   */
+  const makeDraggable = (panel, handle) => {
+    if (!panel || !handle) return;
+    let drag = null;
+    handle.classList.add("is-draggable");
+    handle.addEventListener("pointerdown", (event) => {
+      // Never steal a press meant for a control inside the handle.
+      if (event.target.closest("button, a, input, select")) return;
+      const stage = root.querySelector(".stage");
+      const box = panel.getBoundingClientRect();
+      const stage_box = stage.getBoundingClientRect();
+      drag = {
+        pointer_id: event.pointerId,
+        start_x: event.clientX,
+        start_y: event.clientY,
+        origin_x: box.left - stage_box.left,
+        origin_y: box.top - stage_box.top,
+        width: box.width,
+        height: box.height,
+        stage,
+      };
+      try {
+        handle.setPointerCapture?.(event.pointerId);
+      } catch {
+        // Synthetic pointers have nothing to capture.
+      }
+      event.preventDefault();
+    });
+    handle.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointer_id) return;
+      const max_x = Math.max(0, drag.stage.clientWidth - drag.width);
+      const max_y = Math.max(0, drag.stage.clientHeight - drag.height);
+      const x = Math.min(Math.max(drag.origin_x + event.clientX - drag.start_x, 0), max_x);
+      const y = Math.min(Math.max(drag.origin_y + event.clientY - drag.start_y, 0), max_y);
+      panel.classList.add("is-moved");
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      panel.style.left = `${Math.round(x)}px`;
+      panel.style.top = `${Math.round(y)}px`;
+    });
+    const end = (event) => {
+      if (!drag || (event && event.pointerId !== drag.pointer_id)) return;
+      drag = null;
+    };
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  };
+
+  makeDraggable(root.querySelector(".monitor-panel"), root.querySelector(".monitor-header"));
 
   render();
 

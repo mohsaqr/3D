@@ -322,33 +322,49 @@ export function radialWedgeGeometry(count) {
  * real <button data-camera> elements (wedge-shaped via clip-path), so
  * existing delegation and keyboard shortcuts keep working.
  * @param {Array<{id: string, label: string, hint: string, color: string}>} views
- *   3–8 views; the first wedge is centered at the top.
+ *   Camera views; the first wedge is centered at the top. The hub steps
+ *   through these, because a view is a state you can cycle.
+ * @param {Array<{id: string, label: string, hint: string, color: string}>} [actions]
+ *   Destinations that are not camera moves — examine, records, the body
+ *   map. They sit on the same wheel but are one-shot: the hub never steps
+ *   onto them, they are chosen deliberately. Views + actions ≤ 8.
  * @return {string} HTML markup for the wheel's rims, wedges, and hub.
  * @example
  * buildViewWheelMarkup([{id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff"}, ...]);
  */
-export function buildViewWheelMarkup(views) {
-  if (!Array.isArray(views) || views.length < 3 || views.length > 8) {
-    throw new Error("views must be an array of 3 to 8 entries.");
+export function buildViewWheelMarkup(views, actions = []) {
+  if (!Array.isArray(views) || views.length < 3) {
+    throw new Error("views must be an array of at least 3 entries.");
   }
-  views.forEach((view) => {
-    if ([view?.id, view?.label, view?.hint, view?.color].some((value) => typeof value !== "string" || value.length === 0)) {
-      throw new Error("every view needs id, label, hint, and color strings.");
+  if (!Array.isArray(actions)) {
+    throw new Error("actions must be an array when provided.");
+  }
+  const entries = [...views, ...actions];
+  if (entries.length > 8) {
+    throw new Error("views and actions must total 8 wedges or fewer.");
+  }
+  entries.forEach((entry) => {
+    if ([entry?.id, entry?.label, entry?.hint, entry?.color].some((value) => typeof value !== "string" || value.length === 0)) {
+      throw new Error("every wedge needs id, label, hint, and color strings.");
     }
   });
 
-  const geometry = radialWedgeGeometry(views.length);
-  const rim_paths = views.map((view, index) => {
-    return `<path data-for="${view.id}" d="${geometry[index].rim_d}" stroke="${view.color}"/>`;
+  const geometry = radialWedgeGeometry(entries.length);
+  const rim_paths = entries.map((entry, index) => {
+    return `<path data-for="${escapeHtml(entry.id)}" d="${geometry[index].rim_d}" stroke="${entry.color}"/>`;
   });
-  const wedges = views.map((view, index) => `
-      <button type="button" class="view-wheel__wedge${index === 0 ? " is-active" : ""}" data-camera="${view.id}"
-        style="--wedge-color: ${view.color}; clip-path: polygon(${geometry[index].polygon});">
+  const wedges = entries.map((entry, index) => {
+    const is_view = index < views.length;
+    const target = is_view ? `data-camera="${escapeHtml(entry.id)}"` : `data-nav="${escapeHtml(entry.id)}"`;
+    return `
+      <button type="button" class="view-wheel__wedge${index === 0 ? " is-active" : ""}${is_view ? "" : " view-wheel__wedge--action"}" ${target}
+        style="--wedge-color: ${entry.color}; clip-path: polygon(${geometry[index].polygon});">
         <span class="view-wheel__copy" style="left: ${geometry[index].label_left}; top: ${geometry[index].label_top};">
-          <strong>${view.label}</strong>
-          <small>${view.hint}</small>
+          <strong>${escapeHtml(entry.label)}</strong>
+          <small>${escapeHtml(entry.hint)}</small>
         </span>
-      </button>`);
+      </button>`;
+  });
 
   return `
     <svg class="view-wheel__rims" viewBox="0 0 300 300" aria-hidden="true">${rim_paths.join("")}</svg>

@@ -226,7 +226,7 @@ test("buildViewWheelMarkup renders wedge buttons, rims, hub, and validates input
     });
   });
 
-  assert.throws(() => buildViewWheelMarkup(views.slice(0, 2)), /3 to 8 entries/);
+  assert.throws(() => buildViewWheelMarkup(views.slice(0, 2)), /at least 3 entries/);
   assert.throws(() => buildViewWheelMarkup([...views.slice(0, 3), { id: "x", label: "X", hint: "", color: "#fff" }]), /id, label, hint, and color/);
 });
 
@@ -241,4 +241,37 @@ test("buildViewWheelMarkup makes the hub a stepper that names the next view", ()
   assert.match(markup, /id="view-wheel-next">Patient/);
   // The hub shows the CURRENT view large and the next one small.
   assert.match(markup, /id="view-wheel-label">Overview</);
+});
+
+test("buildViewWheelMarkup carries destinations beside the camera views", () => {
+  const views = [
+    { id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff" },
+    { id: "patient", label: "Patient", hint: "Bedside", color: "#2ae0bd" },
+    { id: "airway", label: "Airway", hint: "Head", color: "#b18cff" },
+  ];
+  const actions = [
+    { id: "examine", label: "Examine", hint: "Body regions", color: "#7ee0c0" },
+    { id: "records", label: "Records", hint: "Chart", color: "#ffb84a" },
+  ];
+  const markup = buildViewWheelMarkup(views, actions);
+  // Views still steer the camera; destinations report themselves instead.
+  assert.equal((markup.match(/data-camera=/g) ?? []).length, 3);
+  assert.equal((markup.match(/data-nav=/g) ?? []).length, 2);
+  assert.match(markup, /data-nav="examine"/);
+  assert.match(markup, /view-wheel__wedge--action/);
+  // The hub still steps only through views — a destination is chosen, not
+  // cycled onto.
+  assert.match(markup, /aria-label="Next camera view: Patient"/);
+});
+
+test("buildViewWheelMarkup keeps the wheel within eight wedges", () => {
+  const views = Array.from({ length: 5 }, (_, index) => ({
+    id: `v${index}`, label: `V${index}`, hint: "hint", color: "#5aa9ff",
+  }));
+  const actions = Array.from({ length: 4 }, (_, index) => ({
+    id: `a${index}`, label: `A${index}`, hint: "hint", color: "#ffb84a",
+  }));
+  assert.throws(() => buildViewWheelMarkup(views, actions), /8 wedges or fewer/);
+  assert.throws(() => buildViewWheelMarkup(views, [{ id: "x", label: "", hint: "h", color: "#fff" }]),
+    /id, label, hint, and color/);
 });
