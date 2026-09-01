@@ -353,9 +353,11 @@ export function buildViewWheelMarkup(views) {
   return `
     <svg class="view-wheel__rims" viewBox="0 0 300 300" aria-hidden="true">${rim_paths.join("")}</svg>
     ${wedges.join("")}
-    <button type="button" class="view-wheel__hub" id="view-wheel-hub" aria-expanded="false" aria-label="Next camera view">
+    <button type="button" class="view-wheel__hub" id="view-wheel-hub" aria-expanded="false"
+      aria-label="Next camera view: ${views[1 % views.length].label}">
       <small>VIEW</small>
       <strong id="view-wheel-label">${views[0].label}</strong>
+      <span class="view-wheel__hub-next" id="view-wheel-next">${views[1 % views.length].label} \u203a</span>
     </button>`;
 }
 

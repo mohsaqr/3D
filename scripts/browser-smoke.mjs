@@ -605,9 +605,16 @@ async function runSmoke(client, app_url, report) {
     await client.evaluate(`({
       active: document.querySelector("#view-wheel")?.dataset.active,
       label: document.querySelector("#view-wheel-label")?.textContent,
+      next: document.querySelector("#view-wheel-next")?.textContent,
+      aria: document.querySelector("#view-wheel-hub")?.getAttribute("aria-label"),
     })`),
-    { active: "monitor", label: "Monitor" },
-    "Clicking the central node must navigate to the next view.",
+    {
+      active: "monitor",
+      label: "Monitor",
+      next: "Equipment \u203a",
+      aria: "Next camera view: Equipment",
+    },
+    "Clicking the central node must navigate and name the view it goes to next.",
   );
   await client.evaluate(`document.querySelector("#view-wheel-hub").click()`);
   assert.equal(

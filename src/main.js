@@ -1330,6 +1330,11 @@ export function mountPatientRoom(container, options = {}) {
     });
     view_wheel.dataset.active = view.id;
     root.querySelector("#view-wheel-label").textContent = view.label;
+    // Say where the hub goes next, so it reads as a stepper rather than a
+    // label — the same affordance the examination wheel's hub carries.
+    const next_view = CAMERA_VIEWS[(CAMERA_VIEWS.indexOf(view) + 1) % CAMERA_VIEWS.length];
+    root.querySelector("#view-wheel-next").textContent = `${next_view.label} \u203a`;
+    view_wheel_hub.setAttribute("aria-label", `Next camera view: ${next_view.label}`);
     scene_controller?.focusPreset(view.id);
   };
   on("[data-camera]", (event) => {

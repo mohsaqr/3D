@@ -229,3 +229,16 @@ test("buildViewWheelMarkup renders wedge buttons, rims, hub, and validates input
   assert.throws(() => buildViewWheelMarkup(views.slice(0, 2)), /3 to 8 entries/);
   assert.throws(() => buildViewWheelMarkup([...views.slice(0, 3), { id: "x", label: "X", hint: "", color: "#fff" }]), /id, label, hint, and color/);
 });
+
+test("buildViewWheelMarkup makes the hub a stepper that names the next view", () => {
+  const views = [
+    { id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff" },
+    { id: "patient", label: "Patient", hint: "Bedside", color: "#2ae0bd" },
+    { id: "airway", label: "Airway", hint: "Head", color: "#b18cff" },
+  ];
+  const markup = buildViewWheelMarkup(views);
+  assert.match(markup, /aria-label="Next camera view: Patient"/);
+  assert.match(markup, /id="view-wheel-next">Patient/);
+  // The hub shows the CURRENT view large and the next one small.
+  assert.match(markup, /id="view-wheel-label">Overview</);
+});

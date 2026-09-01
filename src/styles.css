@@ -854,6 +854,22 @@
   font-weight: 700;
 }
 
+/* Where a click on the hub goes next — the same stepper affordance the
+   examination wheel's hub carries, so both wheels read the same way. */
+.view-wheel__hub-next {
+  display: block;
+  overflow: hidden;
+  max-width: 88px;
+  margin-top: 3px;
+  color: rgba(42, 224, 189, 0.72);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .view-wheel.is-open .view-wheel__rims,
 .view-wheel.is-open .view-wheel__wedge {
   opacity: 1;
