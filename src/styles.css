@@ -763,6 +763,13 @@
   left: calc(100% - 322px);
 }
 
+/* Dragged by hand: its inline position wins, and it stops sliding. */
+.view-wheel.is-moved,
+.view-wheel.is-moved[data-side="right"] {
+  left: auto;
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .view-wheel {
     transition: none;

@@ -999,6 +999,7 @@ async function runSmoke(client, app_url, report) {
     const box = hub.getBoundingClientRect();
     press("pointerdown", box.left + 10, box.top + 10);
     press("pointerup", box.left + 10, box.top + 10);
+    hub.click();
     return {
       before,
       next_hint,
@@ -1024,14 +1025,16 @@ async function runSmoke(client, app_url, report) {
     }));
     press("pointerdown", box.left + 10, box.top + 10);
     press("pointermove", box.left + 190, box.top + 40);
-    const dragging = host.querySelector("#exam-layer").classList.contains("is-dragging");
+    const dragging = host.querySelector("#exam-wheel").classList.contains("is-moved");
     press("pointerup", box.left + 190, box.top + 40);
+    // Browsers fire a click after a drag; it must not step the region.
+    hub.click();
     const moved = { left: wheel.style.left, top: wheel.style.top };
     const region_after_drag = host.querySelector("#exam-wheel-hub strong").textContent;
     return { before, dragging, moved, region_after_drag };
   })()`);
   assert.notEqual(drag_state.moved.left, drag_state.before.left, "Dragging the hub must move the wheel.");
-  assert.equal(drag_state.dragging, true, "The layer marks itself while dragging.");
+  assert.equal(drag_state.dragging, true, "The wheel marks itself once moved.");
   assert.equal(
     drag_state.region_after_drag,
     "Abdomen",
@@ -1400,6 +1403,44 @@ async function runSmoke(client, app_url, report) {
     "An unknown side must be refused, not guessed.",
   );
   report.checks.push("navigation wheel hands its side over and takes it back");
+
+  // The wheel moves by hand too, and a hand-placed wheel stops taking
+  // side instructions — the learner's placement wins.
+  const wheel_drag = await client.evaluate(`(() => {
+    const host = document.querySelector("#bound-host");
+    const wheel = host.querySelector("#view-wheel");
+    const hub = host.querySelector("#view-wheel-hub");
+    const active_before = wheel.dataset.active;
+    const before = Math.round(wheel.getBoundingClientRect().top);
+    const box = hub.getBoundingClientRect();
+    const press = (type, x, y) => hub.dispatchEvent(new PointerEvent(type, {
+      pointerId: 9, clientX: x, clientY: y, bubbles: true, cancelable: true,
+    }));
+    press("pointerdown", box.left + 10, box.top + 10);
+    press("pointermove", box.left + 30, box.top - 180);
+    press("pointerup", box.left + 30, box.top - 180);
+    hub.click();
+    const after = Math.round(wheel.getBoundingClientRect().top);
+    const active_after = wheel.dataset.active;
+    // A side instruction must not move a wheel the learner placed.
+    window.__bound_room.setNavSide("right");
+    return {
+      before,
+      after,
+      moved_left_after_side: Math.round(wheel.getBoundingClientRect().left),
+      left_before_side: Math.round(wheel.getBoundingClientRect().left),
+      stepped: active_before !== active_after,
+    };
+  })()`);
+  assert.ok(wheel_drag.after < wheel_drag.before - 100,
+    `Dragging the hub must move the navigation wheel: ${JSON.stringify(wheel_drag)}`);
+  assert.equal(wheel_drag.stepped, false, "A drag must not also step the view.");
+  assert.equal(
+    wheel_drag.moved_left_after_side,
+    wheel_drag.left_before_side,
+    "A hand-placed wheel ignores side instructions.",
+  );
+  report.checks.push("navigation wheel drags by its hub and then keeps its place");
 
   const disposed_clean = await client.evaluate(`(() => {
     const host = document.querySelector("#bound-host");

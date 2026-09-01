@@ -780,6 +780,10 @@ export function mountPatientRoom(container, options = {}) {
       ring,
       next_label: ring === "special" ? null : nextExamRegion(region.id)?.label ?? null,
     });
+    // Rebuilt markup means a new hub, so the drag handle is re-attached.
+    makeDraggable(exam_elements.wheel, exam_hub(), {
+      onMove: ({ left, top }) => { exam_wheel_pin = { x: left, y: top }; },
+    });
     // A ring re-render destroys the focused wedge; keep keyboard users
     // anchored on the hub instead of dropping focus to <body>.
     if (!exam_elements.layer.hidden) {
@@ -1018,54 +1022,12 @@ export function mountPatientRoom(container, options = {}) {
       });
   };
 
-  // The hub is both the region stepper and the drag handle: a press that
-  // travels moves the wheel out of the way, a press that does not steps to
-  // the next region. Escape and the scrim remain the ways out.
-  let hub_drag = null;
-  exam_elements.wheel?.addEventListener("pointerdown", (event) => {
-    const hub = event.target.closest("#exam-wheel-hub");
-    if (!hub || !exam_state) return;
-    const stage = root.querySelector(".stage");
-    hub_drag = {
-      pointer_id: event.pointerId,
-      start_x: event.clientX,
-      start_y: event.clientY,
-      origin_x: parseFloat(exam_elements.wheel.style.left) || 0,
-      origin_y: parseFloat(exam_elements.wheel.style.top) || 0,
-      stage,
-      moved: false,
-    };
-    try {
-      hub.setPointerCapture?.(event.pointerId);
-    } catch {
-      // A synthetic pointer (tests, assistive tooling) has nothing to
-      // capture; the drag still tracks through the wheel's own listeners.
-    }
-  });
-  exam_elements.wheel?.addEventListener("pointermove", (event) => {
-    if (!hub_drag || event.pointerId !== hub_drag.pointer_id) return;
-    const dx = event.clientX - hub_drag.start_x;
-    const dy = event.clientY - hub_drag.start_y;
-    // A few pixels of travel is a click, not a drag.
-    if (!hub_drag.moved && Math.hypot(dx, dy) < 5) return;
-    hub_drag.moved = true;
-    exam_elements.layer.classList.add("is-dragging");
-    const { x, y } = clampWheelCenter(
-      hub_drag.origin_x + dx,
-      hub_drag.origin_y + dy,
-      hub_drag.stage.clientWidth,
-      hub_drag.stage.clientHeight,
-    );
-    exam_wheel_pin = { x, y };
-    exam_elements.wheel.style.left = `${Math.round(x)}px`;
-    exam_elements.wheel.style.top = `${Math.round(y)}px`;
-  });
-  const endHubDrag = (event) => {
-    if (!hub_drag || (event && event.pointerId !== hub_drag.pointer_id)) return;
-    const dragged = hub_drag.moved;
-    hub_drag = null;
-    exam_elements.layer.classList.remove("is-dragging");
-    if (dragged || !exam_state) return;
+  // The hub is both the region stepper and the drag handle: dragging moves
+  // the wheel off whatever is being examined, clicking steps to the next
+  // region. Escape and the scrim remain the ways out.
+  const exam_hub = () => root.querySelector("#exam-wheel-hub");
+  exam_elements.wheel?.addEventListener("click", (event) => {
+    if (!event.target.closest("#exam-wheel-hub") || !exam_state) return;
     if (exam_state.ring === "special") {
       renderExamRing("main");
       return;
@@ -1073,12 +1035,10 @@ export function mountPatientRoom(container, options = {}) {
     const next = nextExamRegion(exam_state.region.id);
     if (next) openExamWheelFor(next, null, "hub", { in_place: true });
     else closeExamWheel();
-  };
-  exam_elements.wheel?.addEventListener("pointerup", endHubDrag);
-  exam_elements.wheel?.addEventListener("pointercancel", endHubDrag);
+  });
 
   exam_elements.wheel?.addEventListener("click", (event) => {
-    // The hub is handled by the pointer sequence above.
+    // The hub is handled by its own listener above.
     if (event.target.closest("#exam-wheel-hub")) return;
     const wedge = event.target.closest("[data-exam]");
     if (!wedge || !exam_state || exam_state.pending) return;
@@ -1365,8 +1325,9 @@ export function mountPatientRoom(container, options = {}) {
     }
     emit({ type: "nav", id: nav_id });
   });
-  // The central node navigates: each click advances to the next view.
-  // The full wheel opens on hover for direct picking.
+  // The central node navigates: each click advances to the next view, and
+  // a click that trails a drag is swallowed by the drag helper. The full
+  // wheel still opens on hover for direct picking.
   view_wheel_hub.addEventListener("click", () => {
     const current_index = CAMERA_VIEWS.findIndex((candidate) => candidate.id === view_wheel.dataset.active);
     setActiveView(CAMERA_VIEWS[(current_index + 1) % CAMERA_VIEWS.length].id);
@@ -1549,60 +1510,108 @@ export function mountPatientRoom(container, options = {}) {
 
 
   /**
-   * Let a panel be dragged by a handle and stay where it is put.
+   * Let a surface be dragged by a handle and stay where it is put.
    *
-   * Panels are anchored to a corner by CSS; the first drag converts that to
-   * explicit left/top so it can move, and every drag is clamped so the panel
-   * cannot be lost off the stage.
+   * Positions are written to `left`/`top` in LAYOUT space (offsetLeft /
+   * offsetTop), never to the visual box, so whatever transform the element
+   * already carries — the wheels are centred on their own origin — keeps
+   * applying and the surface moves by exactly the pointer delta.
+   *
+   * A press that travels is a drag; a press that does not is a click, so a
+   * control can be its own drag handle. Everything is clamped to the stage,
+   * because a surface dragged off it would be unrecoverable.
+   *
+   * @param {Element} target Surface to move.
+   * @param {Element} handle Grab area, usually a header or hub.
+   * @param {{onMove?: (position: {left: number, top: number}) => void,
+   *   threshold?: number}} [options] Move reporter and the travel in pixels
+   *   that separates a drag from a click. The handle keeps its own click
+   *   handler; only the click that trails a drag is swallowed.
+   * @return {void}
    */
-  const makeDraggable = (panel, handle) => {
-    if (!panel || !handle) return;
+  const makeDraggable = (target, handle, options = {}) => {
+    if (!target || !handle) return;
+    const { onMove = null, threshold = 5 } = options;
     let drag = null;
     handle.classList.add("is-draggable");
+
     handle.addEventListener("pointerdown", (event) => {
       // Never steal a press meant for a control inside the handle.
-      if (event.target.closest("button, a, input, select")) return;
+      if (event.target.closest("button, a, input, select") && event.target.closest("button, a, input, select") !== handle) return;
       const stage = root.querySelector(".stage");
-      const box = panel.getBoundingClientRect();
+      const box = target.getBoundingClientRect();
       const stage_box = stage.getBoundingClientRect();
       drag = {
         pointer_id: event.pointerId,
         start_x: event.clientX,
         start_y: event.clientY,
-        origin_x: box.left - stage_box.left,
-        origin_y: box.top - stage_box.top,
+        origin_left: target.offsetLeft,
+        origin_top: target.offsetTop,
+        // How far the painted box sits from the layout position, so the
+        // clamp works on what the eye sees.
+        skew_x: box.left - stage_box.left - target.offsetLeft,
+        skew_y: box.top - stage_box.top - target.offsetTop,
         width: box.width,
         height: box.height,
         stage,
+        moved: false,
       };
       try {
         handle.setPointerCapture?.(event.pointerId);
       } catch {
         // Synthetic pointers have nothing to capture.
       }
-      event.preventDefault();
     });
+
     handle.addEventListener("pointermove", (event) => {
       if (!drag || event.pointerId !== drag.pointer_id) return;
-      const max_x = Math.max(0, drag.stage.clientWidth - drag.width);
-      const max_y = Math.max(0, drag.stage.clientHeight - drag.height);
-      const x = Math.min(Math.max(drag.origin_x + event.clientX - drag.start_x, 0), max_x);
-      const y = Math.min(Math.max(drag.origin_y + event.clientY - drag.start_y, 0), max_y);
-      panel.classList.add("is-moved");
-      panel.style.right = "auto";
-      panel.style.bottom = "auto";
-      panel.style.left = `${Math.round(x)}px`;
-      panel.style.top = `${Math.round(y)}px`;
+      const dx = event.clientX - drag.start_x;
+      const dy = event.clientY - drag.start_y;
+      if (!drag.moved && Math.hypot(dx, dy) < threshold) return;
+      drag.moved = true;
+      target.classList.add("is-moved");
+      const min_left = -drag.skew_x;
+      const min_top = -drag.skew_y;
+      const left = Math.min(
+        Math.max(drag.origin_left + dx, min_left),
+        min_left + Math.max(0, drag.stage.clientWidth - drag.width),
+      );
+      const top = Math.min(
+        Math.max(drag.origin_top + dy, min_top),
+        min_top + Math.max(0, drag.stage.clientHeight - drag.height),
+      );
+      target.style.left = `${Math.round(left)}px`;
+      target.style.top = `${Math.round(top)}px`;
+      onMove?.({ left, top });
     });
+
+    let swallow_click = false;
     const end = (event) => {
       if (!drag || (event && event.pointerId !== drag.pointer_id)) return;
+      swallow_click = drag.moved;
       drag = null;
     };
     handle.addEventListener("pointerup", end);
     handle.addEventListener("pointercancel", end);
+    // Activation stays a real click, so Enter and Space still work; only
+    // the click that trails a drag is dropped.
+    handle.addEventListener("click", (event) => {
+      if (!swallow_click) return;
+      swallow_click = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
   };
 
   makeDraggable(root.querySelector(".monitor-panel"), root.querySelector(".monitor-header"));
+  // The navigation wheel moves too, and its hub stays a stepper: a press
+  // that travels moves the wheel, a press that does not steps the view.
+  makeDraggable(view_wheel, view_wheel_hub, {
+    onMove: () => {
+      // Once placed by hand, the wheel stops taking side instructions.
+      view_wheel.dataset.placed = "true";
+    },
+  });
 
   render();
 
@@ -1703,6 +1712,8 @@ export function mountPatientRoom(container, options = {}) {
       if (!["left", "right"].includes(side)) {
         throw new Error(`Unknown navigation side: ${side}`);
       }
+      // A wheel the learner has dragged somewhere is not moved again.
+      if (view_wheel.dataset.placed === "true") return;
       view_wheel.dataset.side = side;
     },
     getExamLog() {
