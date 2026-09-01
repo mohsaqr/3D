@@ -976,11 +976,63 @@ async function runSmoke(client, app_url, report) {
     true,
     "The reopened wheel must show an amber done-tick on the performed auscultation wedge.",
   );
-  await client.evaluate(`document.querySelector("#bound-host #exam-wheel-hub").click()`);
+  // The hub steps to the next body region rather than dead-ending.
+  const hub_step = await client.evaluate(`(() => {
+    const host = document.querySelector("#bound-host");
+    const hub = host.querySelector("#exam-wheel-hub");
+    const before = hub.querySelector("strong").textContent;
+    const next_hint = hub.querySelector(".exam-wheel__hub-next")?.textContent.trim();
+    const press = (type, x, y) => hub.dispatchEvent(new PointerEvent(type, {
+      pointerId: 1, clientX: x, clientY: y, bubbles: true,
+    }));
+    const box = hub.getBoundingClientRect();
+    press("pointerdown", box.left + 10, box.top + 10);
+    press("pointerup", box.left + 10, box.top + 10);
+    return {
+      before,
+      next_hint,
+      after: host.querySelector("#exam-wheel-hub strong").textContent,
+      still_open: host.querySelector("#exam-layer").classList.contains("is-open"),
+    };
+  })()`);
+  assert.equal(hub_step.before, "Anterior chest");
+  assert.equal(hub_step.after, "Abdomen", "The hub must step to the next region, not close.");
+  assert.equal(hub_step.next_hint, "Abdomen \u203a", "The hub must name where it goes next.");
+  assert.equal(hub_step.still_open, true, "Stepping regions keeps the wheel open.");
+  report.checks.push("exam wheel hub steps to the next body region and names it");
+
+  // Dragging the hub moves the wheel off the patient and it stays put.
+  const drag_state = await client.evaluate(`(() => {
+    const host = document.querySelector("#bound-host");
+    const wheel = host.querySelector("#exam-wheel");
+    const hub = host.querySelector("#exam-wheel-hub");
+    const before = { left: wheel.style.left, top: wheel.style.top };
+    const box = hub.getBoundingClientRect();
+    const press = (type, x, y) => hub.dispatchEvent(new PointerEvent(type, {
+      pointerId: 2, clientX: x, clientY: y, bubbles: true,
+    }));
+    press("pointerdown", box.left + 10, box.top + 10);
+    press("pointermove", box.left + 190, box.top + 40);
+    const dragging = host.querySelector("#exam-layer").classList.contains("is-dragging");
+    press("pointerup", box.left + 190, box.top + 40);
+    const moved = { left: wheel.style.left, top: wheel.style.top };
+    const region_after_drag = host.querySelector("#exam-wheel-hub strong").textContent;
+    return { before, dragging, moved, region_after_drag };
+  })()`);
+  assert.notEqual(drag_state.moved.left, drag_state.before.left, "Dragging the hub must move the wheel.");
+  assert.equal(drag_state.dragging, true, "The layer marks itself while dragging.");
+  assert.equal(
+    drag_state.region_after_drag,
+    "Abdomen",
+    "A drag must not also be read as a region step.",
+  );
+  report.checks.push("exam wheel drags to a new position and a drag never counts as a click");
+
+  await client.evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
   await waitForCondition(
     client,
     `!document.querySelector("#bound-host #exam-layer")?.classList.contains("is-open")`,
-    "the exam wheel to close from the hub",
+    "the exam wheel to close on Escape",
   );
   assert.equal(
     await client.evaluate(

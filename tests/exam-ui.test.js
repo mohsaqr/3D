@@ -133,6 +133,9 @@ test("buildExamWheelMarkup renders wedges, badge, done ticks, and the hub", () =
   assert.match(markup, /exam-wheel__done--examined/);
   assert.match(markup, /<small>EXAMINE<\/small>/);
   assert.match(markup, /<strong>Anterior chest<\/strong>/);
+  // With no next region given, the hub still just closes.
+  assert.match(markup, /aria-label="Close examination of Anterior chest"/);
+  assert.doesNotMatch(markup, /exam-wheel__hub-next/);
   assert.equal((markup.match(/data-exam=/g) ?? []).length, 5);
   // 5 wedges keep their hints; the sub-ring test below drops them at 6+.
   assert.match(markup, /<small>Listen<\/small>/);
@@ -222,4 +225,25 @@ test("buildFindingCardMarkup validates its inputs", () => {
     finding: "ok",
     audio: [{ label: "Heart" }],
   }), /audio/);
+});
+
+test("buildExamWheelMarkup turns the hub into a region stepper when given a next region", () => {
+  const items = examWheelItems([{ id: "palpation", label: "Palpate", hint: "Feel" }])
+    .map((item) => ({ ...item, color: "#2ae0bd" }));
+  const markup = buildExamWheelMarkup("Anterior chest", items, { next_label: "Abdomen" });
+  assert.match(markup, /aria-label="Examine the next region: Abdomen"/);
+  assert.match(markup, /class="exam-wheel__hub-next">Abdomen/);
+  // The sub-ring's hub still means "back", never "next".
+  const sub = buildExamWheelMarkup("Neck", examSubRingItems(["A", "B"])
+    .map((item) => ({ ...item, color: "#4ecbe0" })), { ring: "special", next_label: "Abdomen" });
+  assert.match(sub, /aria-label="Back to examination techniques for Neck"/);
+  assert.doesNotMatch(sub, /exam-wheel__hub-next/);
+});
+
+test("buildExamWheelMarkup escapes a next-region label", () => {
+  const items = examWheelItems([{ id: "palpation", label: "Palpate" }])
+    .map((item) => ({ ...item, color: "#2ae0bd" }));
+  const markup = buildExamWheelMarkup("Chest", items, { next_label: 'Left "arm" & hand' });
+  assert.match(markup, /Left &quot;arm&quot; &amp; hand/);
+  assert.doesNotMatch(markup, /"arm"/);
 });

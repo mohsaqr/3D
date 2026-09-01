@@ -2040,9 +2040,13 @@
   inset: 0;
   padding: 0;
   border: 0;
+  /* Deliberately see-through: this sits ON the patient, and an opaque disc
+     hides the body being examined. Colour arrives on hover, not at rest. */
   background:
-    linear-gradient(160deg, color-mix(in srgb, var(--wedge-color) 15%, transparent), transparent 55%),
-    rgba(8, 24, 28, 0.9);
+    linear-gradient(160deg, color-mix(in srgb, var(--wedge-color) 10%, transparent), transparent 60%),
+    rgba(5, 17, 20, 0.46);
+  backdrop-filter: blur(3px) saturate(115%);
+  -webkit-backdrop-filter: blur(3px) saturate(115%);
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
@@ -2057,8 +2061,8 @@
 
 .exam-wheel__wedge:hover {
   background:
-    linear-gradient(160deg, color-mix(in srgb, var(--wedge-color) 32%, transparent), transparent 62%),
-    rgba(10, 30, 34, 0.93);
+    linear-gradient(160deg, color-mix(in srgb, var(--wedge-color) 34%, transparent), transparent 62%),
+    rgba(8, 26, 30, 0.72);
 }
 
 /* The clip-path clips the focus outline, so keyboard focus shows as the
@@ -2078,8 +2082,8 @@
 
 .exam-wheel__wedge--back {
   background:
-    linear-gradient(160deg, rgba(147, 167, 173, 0.14), transparent 55%),
-    rgba(10, 22, 25, 0.9);
+    linear-gradient(160deg, rgba(147, 167, 173, 0.1), transparent 55%),
+    rgba(8, 18, 21, 0.4);
 }
 
 .exam-wheel__copy {
@@ -2108,17 +2112,20 @@
 }
 
 .exam-wheel__copy strong {
-  color: var(--ink);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  color: #e6f6f1;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
   text-transform: uppercase;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.85);
 }
 
 .exam-wheel__copy small {
-  color: var(--muted);
-  font-size: 8px;
-  letter-spacing: 0.05em;
+  color: rgba(198, 222, 217, 0.62);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 7.5px;
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.8);
 }
 
 .exam-wheel__wedge.is-done .exam-wheel__copy strong {
@@ -2171,20 +2178,24 @@
   top: 50%;
   left: 50%;
   display: grid;
-  width: 104px;
-  height: 104px;
-  padding: 0 8px;
-  border: 1px solid rgba(42, 224, 189, 0.35);
+  width: 108px;
+  height: 108px;
+  padding: 0 10px;
+  border: 1px solid rgba(42, 224, 189, 0.4);
   border-radius: 50%;
-  gap: 2px;
+  gap: 1px;
   align-content: center;
   justify-items: center;
   color: var(--ink);
   background:
-    radial-gradient(circle at 34% 28%, rgba(120, 240, 214, 0.25), transparent 58%),
-    linear-gradient(155deg, #0d3b38, #071c1f);
-  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45), 0 0 0 6px rgba(5, 18, 21, 0.65);
-  cursor: pointer;
+    radial-gradient(circle at 34% 26%, rgba(120, 240, 214, 0.16), transparent 62%),
+    rgba(6, 22, 25, 0.72);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  /* Drag handle as well as stepper. */
+  cursor: grab;
+  touch-action: none;
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, -50%) scale(0.7);
@@ -2205,11 +2216,37 @@
 
 .exam-wheel__hub strong {
   overflow: hidden;
-  max-width: 86px;
-  font-size: 12px;
+  max-width: 90px;
+  font-size: 11px;
   font-weight: 700;
+  letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Where the hub goes next — the reason it is a control, not a label. */
+.exam-wheel__hub-next {
+  display: block;
+  overflow: hidden;
+  max-width: 90px;
+  margin-top: 2px;
+  color: rgba(42, 224, 189, 0.72);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.exam-layer.is-dragging .exam-wheel__hub {
+  cursor: grabbing;
+  border-color: rgba(42, 224, 189, 0.75);
+}
+
+/* Nothing but the wheel reacts while it is being moved. */
+.exam-layer.is-dragging .exam-wheel__wedge {
+  pointer-events: none;
 }
 
 .exam-layer.is-open .exam-wheel__rims,

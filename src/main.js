@@ -713,9 +713,19 @@ export function mountPatientRoom(container, options = {}) {
   const exam_log = new Map();
   let exam_state = null;
   let exam_epoch = 0;
+  // Once the learner drags the wheel somewhere that does not cover the
+  // patient, it stays there for the rest of the session.
+  let exam_wheel_pin = null;
   let finding_audio = null;
   let finding_hide_timeout = null;
   let autoplay_muted = false;
+
+  const exam_region_order = [...exam_regions.keys()];
+  const nextExamRegion = (region_id) => {
+    if (exam_region_order.length < 2) return null;
+    const index = exam_region_order.indexOf(region_id);
+    return exam_regions.get(exam_region_order[(index + 1) % exam_region_order.length]) ?? null;
+  };
 
   const examLogKey = (region_id, exam_id, test) => `${region_id} ${exam_id} ${test ?? ""}`;
   const techniqueStyle = (exam_id) => EXAM_TECHNIQUE_STYLE[exam_id] ?? DEFAULT_TECHNIQUE_STYLE;
@@ -754,7 +764,10 @@ export function mountPatientRoom(container, options = {}) {
         color: techniqueStyle(item.id).color,
         icon: uiIcon(techniqueStyle(item.id).icon),
       }));
-    exam_elements.wheel.innerHTML = buildExamWheelMarkup(region.label, items, { ring });
+    exam_elements.wheel.innerHTML = buildExamWheelMarkup(region.label, items, {
+      ring,
+      next_label: ring === "special" ? null : nextExamRegion(region.id)?.label ?? null,
+    });
     // A ring re-render destroys the focused wedge; keep keyboard users
     // anchored on the hub instead of dropping focus to <body>.
     if (!exam_elements.layer.hidden) {
@@ -840,11 +853,18 @@ export function mountPatientRoom(container, options = {}) {
     }
   };
 
-  const closeExamWheel = () => {
+  const closeExamWheel = ({ collapse = true } = {}) => {
     if (!exam_state) return;
     const { region, visit_exams } = exam_state;
     exam_state = null;
     exam_epoch += 1;
+    if (!collapse) {
+      // Ending a visit to hand the wheel to the next region: the events
+      // stay balanced, the wheel stays on screen.
+      exam_elements.wheel.classList.remove("is-resolving");
+      emit({ type: "exam_close", region_id: region.id, exams_completed: visit_exams });
+      return;
+    }
     exam_elements.layer.classList.remove("is-open");
     // A close during a pending exam discards its result via the epoch, so
     // the settle handlers never clear this class — clear it here.
@@ -863,10 +883,10 @@ export function mountPatientRoom(container, options = {}) {
     emit({ type: "exam_close", region_id: region.id, exams_completed: visit_exams });
   };
 
-  const openExamWheelFor = (region, point, via) => {
+  const openExamWheelFor = (region, point, via, { in_place = false } = {}) => {
     // Retargeting an already-open wheel closes the abandoned region first,
     // so exam_open/exam_close stay balanced for the host's event stream.
-    closeExamWheel();
+    closeExamWheel({ collapse: !in_place });
     exam_epoch += 1;
     exam_state = { region, ring: "main", visit_exams: 0, pending: false, special_tests: [] };
     // The hub names the region now; the hover pill would linger under the
@@ -877,17 +897,19 @@ export function mountPatientRoom(container, options = {}) {
     scene_controller?.focusPoint(region.center);
     const stage = root.querySelector(".stage");
     const { x, y } = clampWheelCenter(
-      point?.x ?? stage.clientWidth / 2,
-      point?.y ?? stage.clientHeight / 2,
+      exam_wheel_pin?.x ?? point?.x ?? stage.clientWidth / 2,
+      exam_wheel_pin?.y ?? point?.y ?? stage.clientHeight / 2,
       stage.clientWidth,
       stage.clientHeight,
     );
     exam_elements.wheel.style.left = `${Math.round(x)}px`;
     exam_elements.wheel.style.top = `${Math.round(y)}px`;
     renderExamRing("main");
-    exam_elements.layer.hidden = false;
-    exam_elements.layer.classList.remove("is-open");
-    window.requestAnimationFrame(() => exam_elements.layer.classList.add("is-open"));
+    if (!in_place) {
+      exam_elements.layer.hidden = false;
+      exam_elements.layer.classList.remove("is-open");
+      window.requestAnimationFrame(() => exam_elements.layer.classList.add("is-open"));
+    }
     root.querySelector("#exam-wheel-hub")?.focus({ preventScroll: true });
     emit({ type: "exam_open", region_id: region.id, via });
   };
@@ -984,12 +1006,68 @@ export function mountPatientRoom(container, options = {}) {
       });
   };
 
-  exam_elements.wheel?.addEventListener("click", (event) => {
-    if (event.target.closest("#exam-wheel-hub")) {
-      if (exam_state?.ring === "special") renderExamRing("main");
-      else closeExamWheel();
+  // The hub is both the region stepper and the drag handle: a press that
+  // travels moves the wheel out of the way, a press that does not steps to
+  // the next region. Escape and the scrim remain the ways out.
+  let hub_drag = null;
+  exam_elements.wheel?.addEventListener("pointerdown", (event) => {
+    const hub = event.target.closest("#exam-wheel-hub");
+    if (!hub || !exam_state) return;
+    const stage = root.querySelector(".stage");
+    hub_drag = {
+      pointer_id: event.pointerId,
+      start_x: event.clientX,
+      start_y: event.clientY,
+      origin_x: parseFloat(exam_elements.wheel.style.left) || 0,
+      origin_y: parseFloat(exam_elements.wheel.style.top) || 0,
+      stage,
+      moved: false,
+    };
+    try {
+      hub.setPointerCapture?.(event.pointerId);
+    } catch {
+      // A synthetic pointer (tests, assistive tooling) has nothing to
+      // capture; the drag still tracks through the wheel's own listeners.
+    }
+  });
+  exam_elements.wheel?.addEventListener("pointermove", (event) => {
+    if (!hub_drag || event.pointerId !== hub_drag.pointer_id) return;
+    const dx = event.clientX - hub_drag.start_x;
+    const dy = event.clientY - hub_drag.start_y;
+    // A few pixels of travel is a click, not a drag.
+    if (!hub_drag.moved && Math.hypot(dx, dy) < 5) return;
+    hub_drag.moved = true;
+    exam_elements.layer.classList.add("is-dragging");
+    const { x, y } = clampWheelCenter(
+      hub_drag.origin_x + dx,
+      hub_drag.origin_y + dy,
+      hub_drag.stage.clientWidth,
+      hub_drag.stage.clientHeight,
+    );
+    exam_wheel_pin = { x, y };
+    exam_elements.wheel.style.left = `${Math.round(x)}px`;
+    exam_elements.wheel.style.top = `${Math.round(y)}px`;
+  });
+  const endHubDrag = (event) => {
+    if (!hub_drag || (event && event.pointerId !== hub_drag.pointer_id)) return;
+    const dragged = hub_drag.moved;
+    hub_drag = null;
+    exam_elements.layer.classList.remove("is-dragging");
+    if (dragged || !exam_state) return;
+    if (exam_state.ring === "special") {
+      renderExamRing("main");
       return;
     }
+    const next = nextExamRegion(exam_state.region.id);
+    if (next) openExamWheelFor(next, null, "hub", { in_place: true });
+    else closeExamWheel();
+  };
+  exam_elements.wheel?.addEventListener("pointerup", endHubDrag);
+  exam_elements.wheel?.addEventListener("pointercancel", endHubDrag);
+
+  exam_elements.wheel?.addEventListener("click", (event) => {
+    // The hub is handled by the pointer sequence above.
+    if (event.target.closest("#exam-wheel-hub")) return;
     const wedge = event.target.closest("[data-exam]");
     if (!wedge || !exam_state || exam_state.pending) return;
     if (wedge.dataset.back) {

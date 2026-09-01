@@ -486,7 +486,8 @@ export function clampWheelCenter(x, y, width, height, margin = 166) {
  * @param {string} region_label Region name shown in the hub.
  * @param {Array<object>} items Wedge items from examWheelItems or examSubRingItems,
  *   each given a color and optional icon markup by the caller.
- * @param {{ring?: "main"|"special"}} [options] Which ring is rendered.
+ * @param {{ring?: "main"|"special", next_label?: string|null}} [options]
+ *   Which ring is rendered, and the region the hub steps to next.
  * @return {string} HTML markup for the wheel's rims, wedges, and hub.
  * @example
  * buildExamWheelMarkup("Chest", [{id: "palpation", label: "Palpate", hint: "Feel", color: "#2ae0bd"}]);
@@ -499,6 +500,7 @@ export function buildExamWheelMarkup(region_label, items, options = {}) {
     throw new Error("items must be an array of 1 to 8 wedges.");
   }
   const ring = options.ring ?? "main";
+  const next_label = options.next_label ?? null;
   if (!["main", "special"].includes(ring)) {
     throw new Error(`Unknown exam wheel ring: ${ring}`);
   }
@@ -539,9 +541,14 @@ export function buildExamWheelMarkup(region_label, items, options = {}) {
     <button type="button" class="exam-wheel__hub" id="exam-wheel-hub"
       aria-label="${ring === "special"
         ? `Back to examination techniques for ${escapeHtml(region_label)}`
-        : `Close examination of ${escapeHtml(region_label)}`}">
+        : next_label
+          ? `Examine the next region: ${escapeHtml(next_label)}`
+          : `Close examination of ${escapeHtml(region_label)}`}">
       <small>${ring === "special" ? "SPECIAL TESTS" : "EXAMINE"}</small>
       <strong>${escapeHtml(region_label)}</strong>
+      ${ring === "special" || !next_label
+        ? ""
+        : `<span class="exam-wheel__hub-next">${escapeHtml(next_label)} \u203a</span>`}
     </button>`;
 }
 
