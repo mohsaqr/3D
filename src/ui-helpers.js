@@ -322,17 +322,16 @@ export function radialWedgeGeometry(count) {
  * real <button data-camera> elements (wedge-shaped via clip-path), so
  * existing delegation and keyboard shortcuts keep working.
  * @param {Array<{id: string, label: string, hint: string, color: string}>} views
- *   Camera views; the first wedge is centered at the top. The hub steps
- *   through these, because a view is a state you can cycle.
+ *   Camera views; the first wedge is centered at the top.
  * @param {Array<{id: string, label: string, hint: string, color: string}>} [actions]
  *   Destinations that are not camera moves — examine, records, the body
- *   map. They sit on the same wheel but are one-shot: the hub never steps
- *   onto them, they are chosen deliberately. Views + actions ≤ 8.
+ *   map. They sit on the same wheel but are one-shot. Views + actions ≤ 8.
+ * @param {string} [active_view_id] Camera view selected when the wheel mounts.
  * @return {string} HTML markup for the wheel's rims, wedges, and hub.
  * @example
  * buildViewWheelMarkup([{id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff"}, ...]);
  */
-export function buildViewWheelMarkup(views, actions = []) {
+export function buildViewWheelMarkup(views, actions = [], active_view_id = views?.[0]?.id) {
   if (!Array.isArray(views) || views.length < 3) {
     throw new Error("views must be an array of at least 3 entries.");
   }
@@ -348,6 +347,10 @@ export function buildViewWheelMarkup(views, actions = []) {
       throw new Error("every wedge needs id, label, hint, and color strings.");
     }
   });
+  const active_view = views.find((view) => view.id === active_view_id);
+  if (!active_view) {
+    throw new Error("active_view_id must name one of the camera views.");
+  }
 
   const geometry = radialWedgeGeometry(entries.length);
   const rim_paths = entries.map((entry, index) => {
@@ -357,7 +360,7 @@ export function buildViewWheelMarkup(views, actions = []) {
     const is_view = index < views.length;
     const target = is_view ? `data-camera="${escapeHtml(entry.id)}"` : `data-nav="${escapeHtml(entry.id)}"`;
     return `
-      <button type="button" class="view-wheel__wedge${index === 0 ? " is-active" : ""}${is_view ? "" : " view-wheel__wedge--action"}" ${target}
+      <button type="button" class="view-wheel__wedge${entry.id === active_view.id ? " is-active" : ""}${is_view ? "" : " view-wheel__wedge--action"}" ${target}
         style="--wedge-color: ${entry.color}; clip-path: polygon(${geometry[index].polygon});">
         <span class="view-wheel__copy" style="left: ${geometry[index].label_left}; top: ${geometry[index].label_top};">
           <strong>${escapeHtml(entry.label)}</strong>
@@ -370,11 +373,47 @@ export function buildViewWheelMarkup(views, actions = []) {
     <svg class="view-wheel__rims" viewBox="0 0 300 300" aria-hidden="true">${rim_paths.join("")}</svg>
     ${wedges.join("")}
     <button type="button" class="view-wheel__hub" id="view-wheel-hub" aria-expanded="false"
-      aria-label="Next camera view: ${views[1 % views.length].label}">
+      aria-label="Open camera view menu">
       <small>VIEW</small>
-      <strong id="view-wheel-label">${views[0].label}</strong>
-      <span class="view-wheel__hub-next" id="view-wheel-next">${views[1 % views.length].label} \u203a</span>
+      <strong id="view-wheel-label">${active_view.label}</strong>
+      <span class="view-wheel__hub-next" id="view-wheel-next">Choose view</span>
     </button>`;
+}
+
+/** The four camera nudges, named for the bed rather than the screen. */
+export const CAMERA_NUDGES = Object.freeze([
+  { direction: "head", glyph: "\u25b2", label: "Move toward the head of the bed", position: "top" },
+  { direction: "left", glyph: "\u25c0", label: "Step around the bed to the left", position: "left" },
+  { direction: "right", glyph: "\u25b6", label: "Step around the bed to the right", position: "right" },
+  { direction: "foot", glyph: "\u25bc", label: "Move toward the foot of the bed", position: "bottom" },
+]);
+
+/**
+ * A small wheel of four arrows that adjust the camera you are already in.
+ *
+ * Deliberately its OWN wheel rather than a ring around the view wheel: the
+ * view wheel answers "where am I looking", these answer "a bit more to the
+ * left", and a control that does both at once teaches neither. It also
+ * belongs somewhere always reachable, not inside a wheel you have to open.
+ *
+ * "Up" is meaningless to someone looking at a supine patient, so the arrows
+ * are named for the bed and stay true at any camera angle.
+ *
+ * @return {string} Wheel markup; every arrow carries data-nudge.
+ * @example
+ * buildNudgeWheelMarkup();
+ */
+export function buildNudgeWheelMarkup() {
+  const arrows = CAMERA_NUDGES.map((nudge) => `
+      <button type="button" class="nudge-wheel__arrow nudge-wheel__arrow--${nudge.position}"
+        data-nudge="${escapeHtml(nudge.direction)}" aria-label="${escapeHtml(nudge.label)}">
+        <span aria-hidden="true">${nudge.glyph}</span>
+      </button>`);
+  return `
+    <div class="nudge-wheel" role="group" aria-label="Move the camera around the bed">
+      ${arrows.join("")}
+      <span class="nudge-wheel__hub" aria-hidden="true">MOVE</span>
+    </div>`;
 }
 
 /** Canonical clinical ordering for examination techniques on the exam wheel. */

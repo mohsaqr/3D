@@ -21,6 +21,7 @@ const PATIENT_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-patie
 const TRENDS_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-trends.png");
 const BOUND_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-bound.png");
 const RECORDS_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-records.png");
+const BEDSIDE_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-bedside-view.png");
 const WHEEL_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-wheel.png");
 const EXAM_WHEEL_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-exam-wheel.png");
 const FINDING_SCREENSHOT_PATH = join(OUTPUT_DIRECTORY, "rohy-browser-smoke-finding.png");
@@ -600,6 +601,9 @@ async function runSmoke(client, app_url, report) {
     { open: false, active: "airway", label: "Airway" },
     "Choosing a wedge must select the view, update the hub, and close the wheel.",
   );
+  // The hub opens the menu but does not cycle presets. Repeated clicks used
+  // to walk toward progressively wider camera distances and looked like a
+  // mysterious zoom-out.
   await client.evaluate(`document.querySelector("#view-wheel-hub").click()`);
   assert.deepEqual(
     await client.evaluate(`({
@@ -607,20 +611,22 @@ async function runSmoke(client, app_url, report) {
       label: document.querySelector("#view-wheel-label")?.textContent,
       next: document.querySelector("#view-wheel-next")?.textContent,
       aria: document.querySelector("#view-wheel-hub")?.getAttribute("aria-label"),
+      open: document.querySelector("#view-wheel")?.classList.contains("is-open"),
     })`),
     {
-      active: "monitor",
-      label: "Monitor",
-      next: "Equipment \u203a",
-      aria: "Next camera view: Equipment",
+      active: "airway",
+      label: "Airway",
+      next: "Choose view",
+      aria: "Open camera view menu",
+      open: true,
     },
-    "Clicking the central node must navigate and name the view it goes to next.",
+    "Clicking the central node must open the menu without moving the camera.",
   );
   await client.evaluate(`document.querySelector("#view-wheel-hub").click()`);
   assert.equal(
     await client.evaluate(`document.querySelector("#view-wheel")?.dataset.active`),
-    "equipment",
-    "Repeated hub clicks must keep cycling the views.",
+    "airway",
+    "Repeated hub clicks must not change the camera view.",
   );
   await client.evaluate(`document.querySelector("#view-wheel").dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }))`);
   await client.evaluate(`document.querySelector("#view-wheel").dispatchEvent(new PointerEvent("pointerleave", { bubbles: true }))`);
@@ -630,7 +636,7 @@ async function runSmoke(client, app_url, report) {
     false,
     "Leaving the wheel must collapse it.",
   );
-  report.checks.push("view wheel opens on hover, wedges select, and the central node cycles views");
+  report.checks.push("view wheel opens on hover or hub click, and only explicit wedges change the camera");
 
   for (const camera of ["monitor", "equipment", "overview"]) {
     await click(client, `[data-camera="${camera}"]`);
@@ -1453,6 +1459,172 @@ async function runSmoke(client, app_url, report) {
   assert.equal(disposed_clean, true, "Bound-mode dispose must leave the host element empty.");
 
   report.checks.push("bound mode kept only live-data chrome (no demo controls, labels, or parked caption), mirrored rhythm and ECG canvas, said a line on demand, and disposed cleanly");
+
+  // The wheel's arrows adjust the view you are in; the wedges replace it.
+  const nudge = await client.evaluate(`(() => {
+    const wheel = document.querySelector(".view-wheel");
+    const before = { active: wheel.dataset.active, open: wheel.classList.contains("is-open") };
+    const arrows = [...document.querySelectorAll("[data-nudge]")].map((b) => b.dataset.nudge);
+    // Its own wheel, centred in the top bar — reachable without opening
+    // anything, and not a ring bolted onto the view wheel.
+    const cluster = document.querySelector(".nudge-wheel");
+    const topbar = document.querySelector(".topbar");
+    const in_topbar = !!(cluster && topbar && topbar.contains(cluster));
+    const inside_view_wheel = !!(cluster && wheel.contains(cluster));
+    const cluster_box = cluster?.getBoundingClientRect();
+    const topbar_box = topbar?.getBoundingClientRect();
+    const centred = cluster_box && topbar_box
+      ? Math.abs((cluster_box.left + cluster_box.width / 2) - (topbar_box.left + topbar_box.width / 2)) <= 2
+      : false;
+    document.querySelector('[data-nudge="left"]').click();
+    document.querySelector('[data-nudge="head"]').click();
+    return {
+      arrows,
+      active_before: before.active,
+      active_after: wheel.dataset.active,
+      still_open: wheel.classList.contains("is-open") === before.open,
+      in_topbar, inside_view_wheel, centred,
+    };
+  })()`);
+  assert.deepEqual(
+    nudge.arrows.sort(),
+    ["foot", "head", "left", "right"],
+    "The wheel must offer four camera nudges.",
+  );
+  assert.equal(
+    nudge.active_after,
+    nudge.active_before,
+    "A nudge adjusts the current view; it must not switch to another one.",
+  );
+  assert.equal(nudge.still_open, true, "A nudge must not close the wheel — you keep nudging.");
+  assert.equal(nudge.in_topbar, true, "The nudge wheel belongs in the top bar.");
+  assert.equal(nudge.inside_view_wheel, false, "The nudge wheel is its own control, not part of the view wheel.");
+  assert.equal(nudge.centred, true, "The nudge wheel must sit in the MIDDLE of the top bar.");
+  report.checks.push("a separate nudge wheel, centred in the top bar, moves the camera without leaving the current view");
+
+  // A fixed camera onto the same room — what a host puts in a small
+  // portrait so the patient in the circle IS the patient on the bed.
+  // Override to check the framing against a specific avatar GLB — different
+  // models carry different root origins, which is exactly what a fixed
+  // camera preset cannot survive.
+  const BEDSIDE_AVATAR = process.env.BEDSIDE_AVATAR || "/avatars/avatarsdk.glb";
+  // Headless Chrome runs at devicePixelRatio 1, where an unstyled canvas
+  // happens to lay out at exactly its container's size — so the whole class
+  // of backing-store-vs-CSS sizing bugs is invisible here. Every real
+  // laptop screen is 2. Emulate one for this check, or it proves nothing.
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: 1440, height: 900, deviceScaleFactor: 2, mobile: false,
+  });
+  const bedside = await client.evaluate(`(async () => {
+    const { mountBedsideView } = await import("/src/main.js");
+    const host = document.createElement("div");
+    host.id = "bedside-host";
+    // Onscreen and square, so the captured frame below shows the framing a
+    // host's portrait circle actually gets.
+    host.style.cssText = "width:360px;height:360px;position:fixed;left:24px;top:24px;z-index:9999;border-radius:50%;overflow:hidden";
+    document.body.appendChild(host);
+    const avatar = "${BEDSIDE_AVATAR}";
+    const view = await mountBedsideView(host, { avatar_url: avatar });
+    const canvas = host.querySelector("canvas");
+    // Not merely "has a size" — the canvas must match its container. An
+    // unstyled canvas lays out at its backing-store size and silently
+    // crops the view to the middle of the frame.
+    const sized = canvas
+      ? Math.abs(canvas.clientWidth - host.clientWidth) <= 1
+        && Math.abs(canvas.clientHeight - host.clientHeight) <= 1
+      : false;
+    // Give the avatar a moment to land so the capture shows the patient.
+    await view.ready.catch(() => null);
+    await new Promise((r) => setTimeout(r, 900));
+    window.__bedside_view = view;
+    // It is a picture, not a way in: no HUD, and a click selects nothing.
+    const chrome = host.querySelectorAll("button").length;
+    canvas?.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 110, clientY: 110 }));
+    view.setVisemes({ viseme_aa: 0.7 });
+    view.setVisemes(null);
+    view.update("critical", { respiratory_rate: 28 }, 3);
+    // What actually ended up in the bed, and where its head landed — a
+    // framing that misses is indistinguishable from a body that never
+    // loaded unless both are reported.
+    const rig_probe = view.frameOnPatient();
+    // The mirrored framing is opt-in: mount it offscreen so its side is
+    // pinned too, and check the option refuses anything else.
+    let bad_direction = null;
+    try {
+      await mountBedsideView(document.createElement("div"), { head_direction: "up" });
+    } catch (error) {
+      bad_direction = error.message;
+    }
+    const left_host = document.createElement("div");
+    left_host.style.cssText = "width:120px;height:120px;position:fixed;left:-1000px;top:0";
+    document.body.appendChild(left_host);
+    const left_view = await mountBedsideView(left_host, { avatar_url: avatar, head_direction: "left" });
+    await left_view.ready.catch(() => null);
+    const left_probe = left_view.frameOnPatient();
+    left_view.dispose();
+    // The foot-of-bed composition: the camera stands on the bed's axis
+    // beyond the feet (+Z of the head), so the head sits at the top.
+    const head_up_view = await mountBedsideView(left_host, { avatar_url: avatar, view: "head-up" });
+    await head_up_view.ready.catch(() => null);
+    const head_up_probe = head_up_view.frameOnPatient();
+    head_up_view.dispose();
+    left_host.remove();
+    return {
+      mounted: !!canvas, sized, chrome,
+      ready: host.dataset.avatarReady === "true",
+      source: host.dataset.avatarSource ?? null,
+      rig: rig_probe,
+      left_rig: left_probe,
+      head_up_rig: head_up_probe,
+      bad_direction,
+    };
+  })()`);
+
+  // Keep the framing reviewable: a preset that loses the patient off the
+  // side of a square viewport is invisible to every assertion above.
+  const bedside_screenshot = await client.send("Page.captureScreenshot", {
+    format: "png",
+    clip: { x: 24, y: 24, width: 360, height: 360, scale: 1 },
+  });
+  await writeFile(BEDSIDE_SCREENSHOT_PATH, Buffer.from(bedside_screenshot.data, "base64"));
+
+  await client.send("Emulation.clearDeviceMetricsOverride");
+
+  const bedside_disposed = await client.evaluate(`(() => {
+    const host = document.querySelector("#bedside-host");
+    window.__bedside_view.dispose();
+    const emptied = host.innerHTML === "";
+    host.remove();
+    delete window.__bedside_view;
+    return emptied;
+  })()`);
+  assert.equal(bedside.mounted, true, "The bedside view must mount a canvas.");
+  assert.equal(bedside.sized, true, "The bedside view must fill its container.");
+  assert.equal(bedside.chrome, 0, "The bedside view must carry no controls of its own.");
+  assert.equal(bedside.ready, true, "The bedside view must actually load the patient avatar.");
+  assert.ok(bedside.rig, "The bedside view must find a patient to aim at.");
+  // By default the portrait stands on the +X side of the bed, so the head
+  // runs toward the viewer's upper right — the reviewed framing. The
+  // mirrored side is opt-in through head_direction: "left".
+  assert.ok(
+    bedside.rig.camera.x > bedside.rig.x + 0.5,
+    `The default bedside camera must stand on the +X side (camera x ${bedside.rig.camera.x}, head x ${bedside.rig.x}).`,
+  );
+  assert.ok(bedside.left_rig, "The mirrored bedside view must find the patient too.");
+  assert.ok(
+    bedside.left_rig.camera.x < bedside.left_rig.x - 0.5,
+    `head_direction "left" must stand the camera on the -X side (camera x ${bedside.left_rig.camera.x}, head x ${bedside.left_rig.x}).`,
+  );
+  assert.match(bedside.bad_direction ?? "", /head_direction/, "An unknown head_direction must be rejected.");
+  assert.ok(bedside.head_up_rig, "The head-up bedside view must find the patient too.");
+  assert.ok(
+    Math.abs(bedside.head_up_rig.camera.x - bedside.head_up_rig.x) < 0.05
+      && bedside.head_up_rig.camera.z > bedside.head_up_rig.z + 1,
+    `view "head-up" must stand the camera on the bed's axis beyond the feet (camera ${JSON.stringify(bedside.head_up_rig.camera)}, head z ${bedside.head_up_rig.z}).`,
+  );
+  report.bedside = bedside;
+  assert.equal(bedside_disposed, true, "Disposing the bedside view must empty its host.");
+  report.checks.push("bedside view mounts a fixed, control-free camera on the patient and disposes cleanly");
 
   await wait(150);
   assert.deepEqual(page_errors, [], `Page errors were reported:\n${JSON.stringify(page_errors, null, 2)}`);

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import * as THREE from "three";
 
 import {
+  BEDSIDE_HEAD_DIRECTIONS,
   aimBoneAtWorldDirection,
   attachBodyRegions,
   configurePatientAvatar,
@@ -231,7 +232,7 @@ test("createClinicalRoom composes the complete named clinical room", () => {
     "floor",
     "back-wall",
     "left-wall",
-    "ceiling",
+    "right-wall",
     "headwall-accent",
     "skirting",
     "skirting",
@@ -258,7 +259,8 @@ test("createClinicalRoom composes the complete named clinical room", () => {
   });
   assert.equal(room.getObjectByName("floor").receiveShadow, true);
   assert.equal(room.getObjectByName("floor-grid"), undefined, "the stylized floor grid is gone");
-  assert.ok(room.getObjectByName("ceiling") instanceof THREE.Mesh);
+  // No ceiling slab: the room is looked into from above.
+  assert.equal(room.getObjectByName("ceiling"), undefined);
   assert.ok(room.getObjectByName("room-door") instanceof THREE.Object3D);
   assert.ok(room.getObjectByName("wall-clock") instanceof THREE.Object3D);
   assert.ok(room.getObjectByName("whiteboard") instanceof THREE.Object3D);
@@ -268,7 +270,10 @@ test("createClinicalRoom composes the complete named clinical room", () => {
   const blanket_depths = Array.from(blanket.geometry.attributes.position.array)
     .filter((value, index) => index % 3 === 2);
   assert.ok(blanket instanceof THREE.Mesh);
+  assert.equal(blanket.geometry.parameters.width, 1.96);
+  assert.equal(blanket.geometry.parameters.height, 2.42);
   assert.ok(Math.max(...blanket_depths) - Math.min(...blanket_depths) > 0.2);
+  assert.ok(room.getObjectByName("patient-blanket-foot-tuck") instanceof THREE.Mesh);
 });
 
 test("createBed builds rails, supports, wheels, and an interactive bed", () => {
@@ -1156,4 +1161,9 @@ test("updateRiggedPatient layers a decaying wince over the ambient face drive", 
   updateRiggedPatient(rig, "stable", { respiratory_rate: 14 }, 1);
   assert.equal(rig.reaction, null, "an expired reaction clears itself");
   assert.ok(influences[dictionary.eyesClosed] <= 0.001, "the face returns to the ambient drive");
+});
+
+test("bedside head directions are exactly right (default) and left", () => {
+  assert.deepEqual([...BEDSIDE_HEAD_DIRECTIONS], ["right", "left"]);
+  assert.ok(Object.isFrozen(BEDSIDE_HEAD_DIRECTIONS));
 });

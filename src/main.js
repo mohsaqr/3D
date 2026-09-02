@@ -19,6 +19,7 @@ import {
   buildRecordsMarkup,
   buildTreatmentsMarkup,
   buildTrendsMarkup,
+  buildNudgeWheelMarkup,
   buildViewWheelMarkup,
   clampWheelCenter,
   createWavePath,
@@ -206,7 +207,7 @@ export function uiIcon(name) {
  * @example
  * buildAppMarkup(groupActions());
  */
-export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode = "standalone", waveform = "internal", features = {}, nav_actions = []) {
+export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode = "standalone", waveform = "internal", features = {}, nav_actions = [], initial_view = "patient") {
   const bound = mode === "bound";
   const slim = Boolean(features.slim_chrome);
   const action_markup = Object.entries(grouped_actions)
@@ -249,6 +250,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
             <span class="eyebrow">${patient.location}</span>
             <h1>${patient.case_title}</h1>
           </div>
+          ${buildNudgeWheelMarkup()}
           <div class="topbar__status">
             <div class="status-chip status-chip--critical" id="status-chip">
               <span></span><strong>Critical</strong><small>Immediate support required</small>
@@ -318,8 +320,8 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <div class="selection-toast" id="selection-toast" hidden></div>
         <div class="region-hover-label" id="region-hover-label" hidden></div>
 
-        <div class="view-wheel" id="view-wheel" data-active="overview" aria-label="Camera views">
-          ${buildViewWheelMarkup(CAMERA_VIEWS, nav_actions)}
+        <div class="view-wheel" id="view-wheel" data-active="${initial_view}" aria-label="Camera views">
+          ${buildViewWheelMarkup(CAMERA_VIEWS, nav_actions, initial_view)}
         </div>
 
         ${features.exam ? `
@@ -466,6 +468,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
  *   on_event?: (event: object) => void,
  * }} [options] Mount configuration. chrome: "room" drops the room's own brand
  *   block for hosts that render it inside their own application chrome.
+ *   `initial_view` selects the opening camera and defaults to "patient".
  *   Regions carrying exams get the radial exam wheel on click; each pick asks
  *   on_exam for the finding (null presents a neutral "not recorded" card) and
  *   emits exam_open/exam/exam_close events. findings: "host" suppresses the
@@ -589,11 +592,23 @@ export function mountPatientRoom(container, options = {}) {
     // the room renders no finding card of its own.
     finding_card: findings === "internal",
   };
+  const initial_view = options.initial_view ?? "patient";
+  if (!CAMERA_VIEWS.some((view) => view.id === initial_view)) {
+    throw new Error(`Unknown initial camera view: ${initial_view}`);
+  }
   let available_treatments = options.treatments?.available ?? [];
   let active_treatments = [];
 
   container.classList.add("rohy3d-root");
-  container.innerHTML = buildAppMarkup(groupActions(), patient, mode, waveform, features, nav_actions);
+  container.innerHTML = buildAppMarkup(
+    groupActions(),
+    patient,
+    mode,
+    waveform,
+    features,
+    nav_actions,
+    initial_view,
+  );
   const root = container;
 
   let state = createSimulation({
@@ -1101,6 +1116,7 @@ export function mountPatientRoom(container, options = {}) {
       const hover_label = root.querySelector("#region-hover-label");
       scene_controller = initClinicalScene(elements.scene_root, handleSceneSelection, {
         avatar_url: options.avatar_url,
+        camera_preset: initial_view,
         body_regions: options.body_regions ?? null,
         on_region_hover: (region, x, y) => {
           hover_label.hidden = !region;
@@ -1113,6 +1129,12 @@ export function mountPatientRoom(container, options = {}) {
       scene_controller.update(state.status, currentVitals(), state.elapsed_seconds);
       scene_controller.ready.then((loaded_patient) => {
         if (disposed) return;
+        // The opening bedside composition follows the avatar that actually
+        // loaded. GLBs carry different root origins, so a fixed camera that
+        // looks right for one body can point at the pillow for another.
+        if (initial_view === "patient" && view_wheel.dataset.active === initial_view) {
+          scene_controller.frameOnPatient("room");
+        }
         const fallback = loaded_patient.userData.avatar_source === "procedural fallback";
         emit({ type: "avatar", fallback, source: loaded_patient.userData.avatar_source });
         if (!fallback) {
@@ -1297,21 +1319,26 @@ export function mountPatientRoom(container, options = {}) {
   const setActiveView = (view_id) => {
     const view = CAMERA_VIEWS.find((candidate) => candidate.id === view_id);
     if (!view) return;
+    const changed = view_wheel.dataset.active !== view.id;
     root.querySelectorAll("[data-camera]").forEach((camera_button) => {
       camera_button.classList.toggle("is-active", camera_button.dataset.camera === view.id);
     });
     view_wheel.dataset.active = view.id;
     root.querySelector("#view-wheel-label").textContent = view.label;
-    // Say where the hub goes next, so it reads as a stepper rather than a
-    // label — the same affordance the examination wheel's hub carries.
-    const next_view = CAMERA_VIEWS[(CAMERA_VIEWS.indexOf(view) + 1) % CAMERA_VIEWS.length];
-    root.querySelector("#view-wheel-next").textContent = `${next_view.label} \u203a`;
-    view_wheel_hub.setAttribute("aria-label", `Next camera view: ${next_view.label}`);
-    scene_controller?.focusPreset(view.id);
+    // Re-selecting the active wedge must not reset an orbit/zoom adjustment.
+    // Only a genuinely different destination moves the camera.
+    if (changed) scene_controller?.focusPreset(view.id);
   };
   on("[data-camera]", (event) => {
     setActiveView(event.currentTarget.dataset.camera);
     closeWheel();
+  });
+  // An arrow adjusts the view you are in rather than replacing it, so it
+  // deliberately does NOT close the wheel or change the active label — you
+  // stay where you are and keep nudging until it looks right.
+  on("[data-nudge]", (event) => {
+    event.stopPropagation();
+    scene_controller?.nudgeCamera(event.currentTarget.dataset.nudge);
   });
   // A destination is not a camera move: report it and let the host (or the
   // room itself, for "examine") decide what opening it means.
@@ -1325,13 +1352,10 @@ export function mountPatientRoom(container, options = {}) {
     }
     emit({ type: "nav", id: nav_id });
   });
-  // The central node navigates: each click advances to the next view, and
-  // a click that trails a drag is swallowed by the drag helper. The full
-  // wheel still opens on hover for direct picking.
-  view_wheel_hub.addEventListener("click", () => {
-    const current_index = CAMERA_VIEWS.findIndex((candidate) => candidate.id === view_wheel.dataset.active);
-    setActiveView(CAMERA_VIEWS[(current_index + 1) % CAMERA_VIEWS.length].id);
-  });
+  // The hub opens the destination menu. It never moves the camera itself:
+  // repeatedly clicking a navigation affordance should not look like an
+  // unexplained zoom-out through a sequence of preset distances.
+  view_wheel_hub.addEventListener("click", openWheel);
   view_wheel.addEventListener("pointerenter", openWheel);
   view_wheel.addEventListener("pointerleave", () => closeWheel(280));
 
@@ -1747,6 +1771,116 @@ export function mountPatientRoom(container, options = {}) {
     },
     // Present only with waveform: "host" — the host draws its own ECG here.
     ecg_canvas: root.querySelector("#ecg-canvas"),
+  };
+}
+
+/**
+ * Mount a fixed camera onto the room — no HUD, no controls, no way in.
+ *
+ * The patient portrait on a host's main screen wants to be a view OF the
+ * bed rather than a floating head against nothing: the same body, the same
+ * bed, the same light, framed from the bedside. This mounts the room's real
+ * scene at whatever size the container is and holds one camera preset, so a
+ * 200px circle and the full-screen room are two views of one place.
+ *
+ * Interaction is off by default — a portrait the viewer can drag off the
+ * patient is not a camera — and nothing is selectable, so the host's own
+ * click handling on the surrounding element is untouched.
+ *
+ * @param {HTMLElement} container Element to fill. Sized by CSS, not here.
+ * @param {{avatar_url?: string, preset?: string, interactive?: boolean,
+ *   head_direction?: "right"|"left",
+ *   view?: "three-quarter"|"profile"|"head-up"|"overhead",
+ *   status?: string, vitals?: object}} [options] `preset` is a camera
+ *   preset name ("bedside" by default — a close framing composed for a
+ *   small square viewport); `head_direction` is which way the head runs
+ *   across that framing, "right" (default) or "left" (the same view
+ *   mirrored to the other side of the bed); `view` is the composition:
+ *   "three-quarter" (default, from above and toward the head), "profile"
+ *   (side-on, 90° to the body), "head-up" (from the foot of the bed, head
+ *   at the top of the frame) or "overhead" (the same, steeper); `vitals`
+ *   needs a numeric respiratory_rate to drive the breathing.
+ * @return {Promise<{update: Function, setVisemes: Function, react: Function,
+ *   focusPreset: Function, dispose: Function, ready: Promise<object>}>}
+ *   Resolves once three.js has loaded — the scene module is imported on
+ *   demand so a host that never shows this view never pays for it.
+ * @example
+ * const view = await mountBedsideView(circle, { avatar_url: "/avatars/heads/x.glb" });
+ * view.setVisemes({ viseme_aa: 0.6 });
+ */
+export async function mountBedsideView(container, options = {}) {
+  if (!(container instanceof HTMLElement)) {
+    throw new Error("container must be an HTMLElement.");
+  }
+  const head_direction = options.head_direction ?? "right";
+  if (!["right", "left"].includes(head_direction)) {
+    throw new Error(`head_direction must be "right" or "left", got ${head_direction}.`);
+  }
+  const view = options.view ?? "three-quarter";
+  if (!["three-quarter", "profile", "head-up", "overhead"].includes(view)) {
+    throw new Error(`view must be one of "three-quarter", "profile", "head-up", "overhead"; got ${view}.`);
+  }
+  const framing_options = { head_direction, view };
+  // The preset only gets the camera into the right part of the room before
+  // the rig lands; it has to start on the side the framing will settle on,
+  // or the first frames swing across the bed.
+  const default_preset = head_direction === "left" ? "bedside_head_left" : "bedside";
+  const preset = options.preset ?? default_preset;
+  const scene_options = { camera_preset: preset, interactive: options.interactive === true };
+  if (typeof options.avatar_url === "string" && options.avatar_url.length > 0) {
+    scene_options.avatar_url = options.avatar_url;
+  }
+  // Loaded on demand, like the room's own scene: a host that never shows a
+  // bedside view never pays for three.js.
+  const { initClinicalScene } = await import("./scene.js");
+  const controller = initClinicalScene(container, () => {}, scene_options);
+
+  // Frame on the patient as soon as there is one. The camera preset gets
+  // the view into roughly the right part of the room; only the loaded rig
+  // knows where THIS avatar's head actually ended up.
+  controller.ready
+    .then(() => controller.frameOnPatient("bedside", framing_options))
+    .catch(() => {
+      // No avatar: the preset framing stands, showing the empty bed.
+    });
+
+  // The scene animates on its own clock; it only needs to be told what the
+  // body is doing. A host that has real vitals pushes them through update().
+  let status = options.status ?? "stable";
+  let vitals = options.vitals ?? { respiratory_rate: 16 };
+  let seconds = 0;
+  controller.update(status, vitals, seconds);
+  const tick = window.setInterval(() => {
+    seconds += 1;
+    controller.update(status, vitals, seconds);
+  }, 1000);
+
+  return {
+    /** Push the patient's current state; same contract as the room's update. */
+    update(next_status, next_vitals, elapsed_seconds) {
+      if (typeof next_status === "string") status = next_status;
+      if (next_vitals && Number.isFinite(next_vitals.respiratory_rate)) vitals = next_vitals;
+      if (Number.isFinite(elapsed_seconds)) seconds = elapsed_seconds;
+      controller.update(status, vitals, seconds);
+    },
+    setVisemes(map) {
+      controller.setVisemes(map);
+    },
+    react(kind) {
+      controller.reactPatient(kind);
+    },
+    focusPreset(name) {
+      controller.focusPreset(name);
+    },
+    /** Re-aim on the patient (e.g. after swapping the avatar). */
+    frameOnPatient() {
+      return controller.frameOnPatient("bedside", framing_options);
+    },
+    ready: controller.ready,
+    dispose() {
+      window.clearInterval(tick);
+      controller.dispose();
+    },
   };
 }
 

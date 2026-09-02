@@ -56,28 +56,56 @@ function createLinoleumTexture() {
 }
 
 /**
- * Soft night-sky gradient for the window backdrop. Null outside the browser.
+ * Soft, overexposed daylight backdrop for the patient-room window.
+ * Null outside the browser.
  */
-function createNightSkyTexture() {
+function createWindowViewTexture() {
   if (typeof document === "undefined") return null;
   const canvas = document.createElement("canvas");
   canvas.width = 256;
   canvas.height = 256;
   const context = canvas.getContext("2d");
   const gradient = context.createLinearGradient(0, 0, 0, 256);
-  gradient.addColorStop(0, "#1d3450");
-  gradient.addColorStop(0.55, "#152438");
-  gradient.addColorStop(1, "#2c2f31");
+  gradient.addColorStop(0, "#d7e4e5");
+  gradient.addColorStop(0.55, "#f2f5f1");
+  gradient.addColorStop(1, "#c5d1cd");
   context.fillStyle = gradient;
   context.fillRect(0, 0, 256, 256);
-  Array.from({ length: 260 }, (_, index) => index).forEach(() => {
-    context.fillStyle = `rgba(255, ${210 + Math.floor(Math.random() * 45)}, 170, ${0.25 + Math.random() * 0.65})`;
-    context.fillRect(Math.random() * 256, 120 + Math.random() * 130, 1.6, 1.9);
+  // Low-contrast exterior shapes keep the view from reading as a white card
+  // while retaining the blown-out, privacy-safe look of the reference room.
+  Array.from({ length: 11 }, (_, index) => index).forEach((index) => {
+    const width = 18 + (index % 4) * 7;
+    const height = 34 + (index % 5) * 13;
+    const x = index * 25 - 8;
+    const y = 256 - height;
+    context.fillStyle = `rgba(126, 148, 146, ${0.035 + (index % 3) * 0.012})`;
+    context.fillRect(x, y, width, height);
   });
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
+
+/** Which way the head runs across a bedside portrait. */
+export const BEDSIDE_HEAD_DIRECTIONS = Object.freeze(["right", "left"]);
+/**
+ * How the bedside portrait is composed. "three-quarter" looks down from
+ * above and toward the head so the face reads; "profile" stands square to
+ * the bed (90° to the body) at chest height, the side-on view the portrait
+ * started with; "head-up" stands at the foot of the bed looking up the body
+ * so the head sits at the TOP of the frame; "overhead" is the same but
+ * steeper, nearly looking straight down.
+ */
+export const BEDSIDE_VIEWS = Object.freeze(["three-quarter", "profile", "head-up", "overhead"]);
+// Camera offset from the aim point, per bedside view, for head_direction
+// "right" (camera on +X); "left" mirrors x. The foot-of-bed views have no
+// x component, so head_direction leaves them alone.
+const BEDSIDE_OFFSETS = Object.freeze({
+  "three-quarter": { target: new THREE.Vector3(0, -0.04, 0.12), camera: new THREE.Vector3(1.16, 1.28, 0.82) },
+  profile: { target: new THREE.Vector3(0, -0.08, 0.28), camera: new THREE.Vector3(1.75, 0.62, 0.28) },
+  "head-up": { target: new THREE.Vector3(0, -0.16, 0.36), camera: new THREE.Vector3(0, 1.55, 1.15) },
+  overhead: { target: new THREE.Vector3(0, -0.15, 0.3), camera: new THREE.Vector3(0, 2.1, 0.75) },
+});
 
 const CAMERA_PRESETS = Object.freeze({
   overview: {
@@ -85,16 +113,35 @@ const CAMERA_PRESETS = Object.freeze({
     target: new THREE.Vector3(0, 1.3, 0),
   },
   patient: {
-    position: new THREE.Vector3(2.35, 2.55, 0.85),
-    target: new THREE.Vector3(0, 1.5, -1.1),
+    // Three-quarter bedside view from the opposite side of the bed.
+    position: new THREE.Vector3(4, 3.7, 2.32),
+    target: new THREE.Vector3(0, 1.2, -0.68),
+  },
+  // Close bedside framing for a small, roughly square viewport — a portrait
+  // circle on a host's main screen. The room presets are composed for a wide
+  // canvas; at 1:1 the horizontal field narrows sharply and a wide framing
+  // loses the patient off the side, which is why this one comes in close and
+  // aims at the chest-to-face span rather than the whole bed.
+  // It stands on the +X side of the bed, so the head runs off to the
+  // viewer's upper right and the body recedes to the lower left.
+  bedside: {
+    position: new THREE.Vector3(1.36, 2.08, -0.46),
+    target: new THREE.Vector3(0.02, 1.47, -1.08),
+  },
+  // The same framing mirrored to the -X side: head to the viewer's upper
+  // left. Opt-in (`head_direction: "left"` on a bedside mount); the default
+  // above is the reviewed one.
+  bedside_head_left: {
+    position: new THREE.Vector3(-1.36, 2.08, -0.46),
+    target: new THREE.Vector3(-0.02, 1.47, -1.08),
   },
   airway: {
     position: new THREE.Vector3(2.4, 2.55, 0.6),
     target: new THREE.Vector3(0, 1.62, -1.25),
   },
   monitor: {
-    position: new THREE.Vector3(5.25, 3.15, 0.4),
-    target: new THREE.Vector3(3.15, 2.05, -1.25),
+    position: new THREE.Vector3(6.5, 3.15, 1),
+    target: new THREE.Vector3(4.6, 2.05, -0.65),
   },
   equipment: {
     position: new THREE.Vector3(-4.6, 3.2, 3.1),
@@ -128,15 +175,20 @@ export function createClinicalRoom() {
   });
   room.add(createBox("back-wall", [12, 5.5, 0.18], wall_material, [0, 2.72, -5]));
   room.add(createBox("left-wall", [0.18, 5.5, 10], wall_material, [-6, 2.72, 0]));
+  // Close the far side for bedside cameras without boxing in the exterior
+  // overview/monitor presets. The plane faces inward (-X), so cameras just
+  // outside the right side see its culled back face and can still look in.
+  const right_wall = new THREE.Mesh(new THREE.PlaneGeometry(10, 5.5), wall_material);
+  right_wall.name = "right-wall";
+  right_wall.rotation.y = -Math.PI / 2;
+  right_wall.position.set(5.91, 2.72, 0);
+  right_wall.receiveShadow = true;
+  room.add(right_wall);
 
-  const ceiling = createBox(
-    "ceiling",
-    [12, 0.14, 10],
-    new THREE.MeshStandardMaterial({ color: 0xdfe2dd, roughness: 0.96 }),
-    [0, 5.54, 0],
-  );
-  ceiling.castShadow = false;
-  room.add(ceiling);
+  // No ceiling slab. The room is looked INTO — from the overview camera, from
+  // a bedside portrait, from any angle a host frames — and a lid on top of it
+  // buys nothing but a surface to collide with. The recessed luminaire and
+  // its matching RectAreaLight stay, so the light still comes from overhead.
 
   // Sage accent band behind the bed head, as hospitals paint them.
   room.add(createBox(
@@ -211,7 +263,10 @@ export function createBed() {
   group.add(footboard);
 
   [-1.02, 1.02].forEach((x_position) => {
-    group.add(createRail(x_position));
+    // The clinician-side rail is lowered for access. Besides matching normal
+    // bedside practice, it keeps the metal bars from cutting across the
+    // patient in the primary three-quarter camera.
+    group.add(createRail(x_position, x_position > 0));
   });
   [-0.92, 0.92].forEach((x_position) => {
     [-1.78, 1.78].forEach((z_position) => {
@@ -783,31 +838,58 @@ function createPatientBlanket() {
   const group = new THREE.Group();
   group.name = "patient-bed-cover";
   const blanket_material = new THREE.MeshPhysicalMaterial({
-    color: COLORS.blanket,
-    roughness: 0.92,
-    sheen: 0.55,
-    sheenRoughness: 0.85,
-    sheenColor: new THREE.Color(0xffffff),
+    color: 0xe8eee9,
+    roughness: 0.98,
+    sheen: 0.32,
+    sheenRoughness: 0.96,
+    sheenColor: new THREE.Color(0xf7faf7),
+    side: THREE.DoubleSide,
   });
-  const blanket_geometry = new THREE.PlaneGeometry(1.62, 2.02, 24, 32);
+  // Long enough to turn under the feet. The old two-metre plane stopped at
+  // the ankles and exposed shoes; a real top sheet continues almost to the
+  // footboard and drops down both sides of the mattress.
+  const blanket_geometry = new THREE.PlaneGeometry(1.96, 2.42, 32, 42);
   const positions = blanket_geometry.attributes.position;
   const vertex = new THREE.Vector3();
   Array.from({ length: positions.count }, (_, index) => index).forEach((index) => {
     vertex.fromBufferAttribute(positions, index);
-    const width_profile = Math.max(0, 1 - (vertex.x / 0.88) ** 4);
-    const body_profile = 0.12 + 0.16 * Math.exp(-1 * ((vertex.y - 0.2) / 0.72) ** 2);
-    const soft_fold = Math.sin(vertex.y * 16 + vertex.x * 5) * 0.018;
-    const edge_drop = 0.09 * Math.abs(vertex.x / 0.81) ** 5;
-    positions.setZ(index, body_profile * width_profile + soft_fold - edge_drop);
+    const edge_ratio = Math.min(1, Math.abs(vertex.x) / 0.98);
+    const center_profile = Math.max(0, 1 - edge_ratio ** 5);
+    const torso = 0.12 * Math.exp(-(((vertex.y - 0.72) / 0.48) ** 2));
+    const left_leg = 0.08 * Math.exp(-(((vertex.x + 0.29) / 0.34) ** 2))
+      * Math.exp(-(((vertex.y - 0.08) / 0.72) ** 2));
+    const right_leg = 0.08 * Math.exp(-(((vertex.x - 0.29) / 0.34) ** 2))
+      * Math.exp(-(((vertex.y - 0.08) / 0.72) ** 2));
+    const toe_cover = 0.15 * Math.exp(-(((vertex.y + 0.74) / 0.3) ** 2));
+    const length_ratio = THREE.MathUtils.clamp((vertex.y + 1.21) / 2.42, 0, 1);
+    const length_fade = Math.max(0, Math.sin(length_ratio * Math.PI)) ** 0.35;
+    const cross_fold = Math.sin(vertex.y * 11.5 + vertex.x * 2.4) * 0.012;
+    const long_fold = Math.sin(vertex.x * 18 - vertex.y * 1.8) * 0.007;
+    const edge_drop = 0.2 * edge_ratio ** 5;
+    positions.setZ(
+      index,
+      0.06 + (torso + left_leg + right_leg + toe_cover) * center_profile
+        + (cross_fold + long_fold) * center_profile * length_fade - edge_drop,
+    );
   });
   blanket_geometry.computeVertexNormals();
   const blanket = new THREE.Mesh(blanket_geometry, blanket_material);
   blanket.name = "patient-blanket";
   blanket.rotation.x = -Math.PI / 2;
-  blanket.position.set(0, 1.43, 0.56);
+  blanket.position.set(0, 1.43, 0.87);
   blanket.castShadow = true;
   blanket.receiveShadow = true;
   group.add(blanket);
+
+  const foot_tuck = new THREE.Mesh(
+    new RoundedBoxGeometry(1.92, 0.18, 0.16, 4, 0.055),
+    blanket_material,
+  );
+  foot_tuck.name = "patient-blanket-foot-tuck";
+  foot_tuck.position.set(0, 1.42, 2.03);
+  foot_tuck.castShadow = true;
+  foot_tuck.receiveShadow = true;
+  group.add(foot_tuck);
   return group;
 }
 
@@ -865,6 +947,12 @@ export function createMonitor() {
   const monitor_wave = createMonitorWave();
   monitor_wave.position.set(3.2, 2.35, -1.305);
   group.add(monitor_wave);
+
+  // Keep the physical monitor realistically sized and in the equipment bay
+  // at the far right. The original 1.55 m-wide shell became a black wall in
+  // the bedside camera; this is roughly a 28-inch clinical display.
+  group.scale.set(0.72, 1, 0.72);
+  group.position.set(2.3, 0, 0.4);
 
   tagInteractive(group, "monitor", "View bedside monitor");
   return group;
@@ -1042,6 +1130,17 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.domElement.setAttribute("aria-label", "Interactive 3D patient room");
   renderer.domElement.setAttribute("role", "img");
+  // Own the canvas's layout rather than relying on the host to style it.
+  // setSize(w, h, false) deliberately leaves the CSS size alone, so an
+  // unstyled canvas lays out at its ATTRIBUTE size — width x devicePixelRatio,
+  // up to 1.8x too big. Inside this package's own markup a stylesheet rule
+  // hides that; a host mounting into a plain div gets a canvas overflowing
+  // its container by 80%, which reads as a camera zoomed most of the way
+  // into the patient. The package's own CSS says exactly this, so the room
+  // is unchanged.
+  renderer.domElement.style.display = "block";
+  renderer.domElement.style.width = "100%";
+  renderer.domElement.style.height = "100%";
   container.appendChild(renderer.domElement);
 
   // Image-based lighting: every PBR material picks up soft studio reflections,
@@ -1051,15 +1150,36 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
   scene.environmentIntensity = 0.42;
   pmrem.dispose();
 
+  // A host mounting this as a fixed camera (a bedside portrait, a wall
+  // monitor) frames it on one preset from the first frame and takes the
+  // orbit controls away — a view that glides in from the overview, or that
+  // the viewer can drag off the patient, is not a camera.
+  const start_preset = options.camera_preset ?? null;
+  if (start_preset !== null && !CAMERA_PRESETS[start_preset]) {
+    throw new Error(`Unknown camera preset: ${start_preset}`);
+  }
+  if (start_preset) {
+    camera.position.copy(CAMERA_PRESETS[start_preset].position);
+  }
+
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.copy(CAMERA_PRESETS.overview.target);
+  controls.target.copy(
+    start_preset ? CAMERA_PRESETS[start_preset].target : CAMERA_PRESETS.overview.target,
+  );
+  const interactive = options.interactive !== false;
+  controls.enabled = interactive;
   controls.enableDamping = true;
   controls.dampingFactor = 0.055;
   controls.enablePan = false;
-  controls.minDistance = 2.8;
-  controls.maxDistance = 11;
-  controls.minPolarAngle = Math.PI * 0.17;
-  controls.maxPolarAngle = Math.PI * 0.48;
+  // These clamps keep a DRAGGING viewer inside the room. `update()` enforces
+  // them every frame whether or not the controls are enabled, so a fixed
+  // camera has to be let out of them — otherwise a close bedside framing is
+  // shoved back to 2.8 m and ends up looking at the IV pole instead of the
+  // patient.
+  controls.minDistance = interactive ? 2.8 : 0.2;
+  controls.maxDistance = interactive ? 11 : 60;
+  controls.minPolarAngle = interactive ? Math.PI * 0.17 : 0;
+  controls.maxPolarAngle = interactive ? Math.PI * 0.48 : Math.PI;
 
   scene.add(new THREE.HemisphereLight(0xdde7e4, 0x3b4145, 0.5));
 
@@ -1080,7 +1200,7 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
   key_light.shadow.radius = 4;
   scene.add(key_light, key_light.target);
 
-  // Cool spill from the night window.
+  // Cool daylight spill from the window.
   const window_light = new THREE.DirectionalLight(0x9fc0e4, 0.55);
   window_light.position.set(0.7, 3.6, -4.8);
   window_light.target.position.set(0, 1.2, 1.5);
@@ -1088,7 +1208,7 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
 
   // The monitor's screen throws a faint teal wash onto the bed.
   const monitor_light = new THREE.PointLight(COLORS.teal, 2.4, 4.5, 1.9);
-  monitor_light.position.set(3.05, 2.4, -1.1);
+  monitor_light.position.set(4.6, 2.4, -0.65);
   scene.add(monitor_light);
 
   let disposed = false;
@@ -1152,7 +1272,15 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
 
   const handle_pointer = (event) => {
     setPointerFromEvent(event);
-    const hit = raycaster.intersectObject(room, true).find((intersection) => {
+    // Examination colliders deliberately sit around/inside the rendered
+    // body. Prefer one under the pointer before the avatar skin or blanket;
+    // otherwise camera angle and mesh thickness decide whether the exact
+    // same chest click opens an exam or merely selects "patient".
+    const colliders = room.getObjectByName("patient-avatar")?.userData.body_region_colliders;
+    const region_hit = colliders?.length
+      ? raycaster.intersectObjects(colliders, false)[0]
+      : null;
+    const hit = region_hit ?? raycaster.intersectObject(room, true).find((intersection) => {
       return findInteractiveData(intersection.object);
     });
     if (hit) {
@@ -1165,7 +1293,11 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
       });
     }
   };
-  renderer.domElement.addEventListener("click", handle_pointer);
+  // A non-interactive mount is a picture of the room, not a way into it:
+  // no selection, and no cursor promising one.
+  if (options.interactive !== false) {
+    renderer.domElement.addEventListener("click", handle_pointer);
+  }
 
   // Hover highlight for examination regions: the collider under the pointer
   // glows faintly and the cursor becomes a pointer. An emphasized region
@@ -1195,7 +1327,7 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
     hovered_region = hit;
     renderer.domElement.style.cursor = hit ? "pointer" : "";
   };
-  if (body_regions) {
+  if (body_regions && options.interactive !== false) {
     renderer.domElement.addEventListener("pointermove", handle_hover);
   }
 
@@ -1297,6 +1429,114 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
       if (rig) {
         rig.visemes = map;
       }
+    },
+    // Nudge the camera without leaving the view you are in.
+    //
+    // The wheel's wedges jump between composed views; these are the small
+    // adjustments a clinician makes with their feet — step around the bed,
+    // move up toward the head, back down toward the foot — so a view that
+    // is nearly right can be made right instead of abandoned.
+    //
+    // @param {"left"|"right"|"head"|"foot"} direction
+    // @return {void}
+    nudgeCamera(direction) {
+      const from_position = camera.position.clone();
+      const from_target = controls.target.clone();
+      // Stack rapid presses on the destination already in flight. Starting
+      // every press from the partially interpolated frame used to discard
+      // most of the requested movement and made the arrows feel erratic.
+      const to_position = camera_transition?.to_position.clone() ?? from_position.clone();
+      const to_target = camera_transition?.to_target.clone() ?? from_target.clone();
+      if (direction === "left" || direction === "right") {
+        // Orbit about the point being looked at, so the patient stays put
+        // and the room turns around them.
+        const sign = direction === "left" ? 1 : -1;
+        const offset = to_position.clone().sub(to_target);
+        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), sign * (Math.PI / 13));
+        to_position.copy(to_target.clone().add(offset));
+      } else if (direction === "head" || direction === "foot") {
+        // Slide along the bed. The head of the bed is at -Z.
+        const shift = new THREE.Vector3(0, 0, direction === "head" ? -0.42 : 0.42);
+        to_position.add(shift);
+        to_target.add(shift);
+      } else {
+        throw new Error(`Unknown camera nudge: ${direction}`);
+      }
+      camera_transition = {
+        start: performance.now(),
+        from_position,
+        from_target,
+        to_position,
+        to_target,
+      };
+    },
+    // Aim the camera at the patient who is actually in the bed.
+    //
+    // A fixed coordinate preset cannot do this job: every avatar GLB carries
+    // its own root origin and proportions, so the same transform lands one
+    // model's head where another model's chest is. A preset calibrated
+    // against one avatar quietly points at the oxygen bottle for the next.
+    // This reads the loaded rig instead and frames whoever is there.
+    //
+    // @return {{x: number, y: number, z: number, rigged: boolean,
+    //   camera: {x: number, y: number, z: number}}|null}
+    //   Where it aimed (and from where), or null when no patient has loaded
+    //   yet. Returning the point (rather than a boolean) is what lets a
+    //   caller SEE that a body loaded but landed somewhere unexpected — the
+    //   two failures look identical in a screenshot. The camera point pins
+    //   which side of the bed the view stands on.
+    //
+    // @param {"bedside"|"room"} [framing]
+    // @param {{head_direction?: "right"|"left",
+    //   view?: "three-quarter"|"profile"|"head-up"|"overhead"}} [options] For the bedside
+    //   framing: which way the head runs across the frame — "right" (the
+    //   default, camera on +X) or "left" (mirrored to -X) — and the
+    //   composition, see BEDSIDE_VIEWS. Ignored by the room framing, whose
+    //   composition is fixed.
+    frameOnPatient(framing = "bedside", options = {}) {
+      if (!["bedside", "room"].includes(framing)) {
+        throw new Error(`Unknown patient framing: ${framing}`);
+      }
+      const head_direction = options.head_direction ?? "right";
+      if (!BEDSIDE_HEAD_DIRECTIONS.includes(head_direction)) {
+        throw new Error(`Unknown head_direction: ${head_direction}`);
+      }
+      const view = options.view ?? "three-quarter";
+      if (!BEDSIDE_VIEWS.includes(view)) {
+        throw new Error(`Unknown bedside view: ${view}`);
+      }
+      const side = head_direction === "left" ? -1 : 1;
+      const bedside_offsets = BEDSIDE_OFFSETS[view];
+      const patient = room.getObjectByName("patient-avatar");
+      if (!patient) return null;
+      patient.updateMatrixWorld(true);
+      const focus = new THREE.Vector3();
+      const head = patient.userData.avatar_rig?.head;
+      if (head) {
+        head.getWorldPosition(focus);
+      } else {
+        // No rig (the schematic fallback patient): the body's own centre.
+        new THREE.Box3().setFromObject(patient).getCenter(focus);
+      }
+      // Both framings derive from the real head, not an assumed GLB origin.
+      // The room view mirrors the supplied bedside reference: a medium,
+      // three-quarter view with the covered legs receding to the right. The
+      // bedside portrait stands on +X by default (head to the viewer's
+      // right) and mirrors to -X when asked for head_direction "left".
+      const room_view = framing === "room";
+      const target = focus.clone().add(
+        room_view ? new THREE.Vector3(0, -0.1, 0.65) : bedside_offsets.target,
+      );
+      const camera_offset = room_view
+        ? new THREE.Vector3(4, 2.5, 3)
+        : bedside_offsets.camera.clone().setX(side * bedside_offsets.camera.x);
+      camera.position.copy(target.clone().add(camera_offset));
+      controls.target.copy(target);
+      camera.lookAt(target);
+      return {
+        x: focus.x, y: focus.y, z: focus.z, rigged: Boolean(head),
+        camera: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+      };
     },
     // One-shot facial reaction on the rigged patient (currently: "wince").
     reactPatient(kind) {
@@ -1442,12 +1682,12 @@ export function findInteractiveData(object) {
 function createWindow() {
   const group = new THREE.Group();
   group.name = "room-window";
-  const night_texture = createNightSkyTexture();
+  const view_texture = createWindowViewTexture();
   const backdrop = new THREE.Mesh(
     new THREE.PlaneGeometry(4.05, 2.2),
     new THREE.MeshBasicMaterial({
-      map: night_texture,
-      color: night_texture ? 0xffffff : 0x1a2c42,
+      map: view_texture,
+      color: view_texture ? 0xffffff : 0xdce6e2,
     }),
   );
   backdrop.name = "window-view";
@@ -1481,22 +1721,23 @@ function createWindow() {
   return group;
 }
 
-function createRail(x_position) {
+function createRail(x_position, raised = true) {
   const group = new THREE.Group();
   group.name = "bed-rail";
+  const rail_height = raised ? 0 : -0.34;
   const rail_material = new THREE.MeshStandardMaterial({
     color: 0xe8ebed,
     roughness: 0.22,
     metalness: 0.85,
   });
-  const top_bar = createCylinder("rail-top", 0.032, 0.032, 2.95, rail_material, [x_position, 1.62, 0.15]);
+  const top_bar = createCylinder("rail-top", 0.032, 0.032, 2.95, rail_material, [x_position, 1.62 + rail_height, 0.15]);
   top_bar.rotation.x = Math.PI / 2;
   group.add(top_bar);
-  const mid_bar = createCylinder("rail-mid", 0.024, 0.024, 2.75, rail_material, [x_position, 1.47, 0.15]);
+  const mid_bar = createCylinder("rail-mid", 0.024, 0.024, 2.75, rail_material, [x_position, 1.47 + rail_height, 0.15]);
   mid_bar.rotation.x = Math.PI / 2;
   group.add(mid_bar);
   [-1.12, -0.38, 0.38, 1.12].forEach((z_position) => {
-    group.add(createCylinder("rail-post", 0.024, 0.024, 0.5, rail_material, [x_position, 1.37, z_position]));
+    group.add(createCylinder("rail-post", 0.024, 0.024, 0.5, rail_material, [x_position, 1.37 + rail_height, z_position]));
   });
   return group;
 }

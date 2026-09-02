@@ -148,6 +148,72 @@
   -webkit-backdrop-filter: blur(22px) saturate(118%);
 }
 
+/* The camera-nudge wheel: its own control, centred in the top bar so it is
+   reachable without opening anything. Absolutely positioned rather than a
+   grid column, so it is centred on the BAR and not on whatever space the
+   case heading happens to leave. */
+.nudge-wheel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 74px;
+  height: 74px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(42, 224, 189, 0.22);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 36% 28%, rgba(120, 240, 214, 0.14), transparent 62%),
+    rgba(5, 18, 21, 0.72);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+
+.nudge-wheel__hub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 7px;
+  letter-spacing: 0.16em;
+  color: rgba(160, 236, 219, 0.5);
+  pointer-events: none;
+}
+
+.nudge-wheel__arrow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(160, 236, 219, 0.72);
+  font-size: 8px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.nudge-wheel__arrow:hover {
+  background: rgba(42, 224, 189, 0.16);
+  color: #ffffff;
+}
+
+.nudge-wheel__arrow:focus-visible {
+  outline: 2px solid rgba(42, 224, 189, 0.8);
+  outline-offset: 1px;
+}
+
+.nudge-wheel__arrow--top { transform: translate(-50%, -50%) translateY(-24px); }
+.nudge-wheel__arrow--bottom { transform: translate(-50%, -50%) translateY(24px); }
+.nudge-wheel__arrow--left { transform: translate(-50%, -50%) translateX(-24px); }
+.nudge-wheel__arrow--right { transform: translate(-50%, -50%) translateX(24px); }
+
 .topbar {
   position: absolute;
   z-index: 5;
@@ -891,8 +957,7 @@
   font-weight: 700;
 }
 
-/* Where a click on the hub goes next — the same stepper affordance the
-   examination wheel's hub carries, so both wheels read the same way. */
+/* A quiet action hint: the hub opens this menu but never moves the camera. */
 .view-wheel__hub-next {
   display: block;
   overflow: hidden;

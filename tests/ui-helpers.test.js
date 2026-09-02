@@ -6,6 +6,7 @@ import {
   buildRecordsMarkup,
   buildTreatmentsMarkup,
   buildTrendsMarkup,
+  buildNudgeWheelMarkup,
   buildViewWheelMarkup,
   createTrendPath,
   createWavePath,
@@ -230,17 +231,28 @@ test("buildViewWheelMarkup renders wedge buttons, rims, hub, and validates input
   assert.throws(() => buildViewWheelMarkup([...views.slice(0, 3), { id: "x", label: "X", hint: "", color: "#fff" }]), /id, label, hint, and color/);
 });
 
-test("buildViewWheelMarkup makes the hub a stepper that names the next view", () => {
+test("buildViewWheelMarkup makes the hub a menu opener that does not move the camera", () => {
   const views = [
     { id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff" },
     { id: "patient", label: "Patient", hint: "Bedside", color: "#2ae0bd" },
     { id: "airway", label: "Airway", hint: "Head", color: "#b18cff" },
   ];
   const markup = buildViewWheelMarkup(views);
-  assert.match(markup, /aria-label="Next camera view: Patient"/);
-  assert.match(markup, /id="view-wheel-next">Patient/);
-  // The hub shows the CURRENT view large and the next one small.
+  assert.match(markup, /aria-label="Open camera view menu"/);
+  assert.match(markup, /id="view-wheel-next">Choose view/);
   assert.match(markup, /id="view-wheel-label">Overview</);
+});
+
+test("buildViewWheelMarkup can mount with a non-first active view", () => {
+  const views = [
+    { id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff" },
+    { id: "patient", label: "Patient", hint: "Bedside", color: "#2ae0bd" },
+    { id: "airway", label: "Airway", hint: "Head", color: "#b18cff" },
+  ];
+  const markup = buildViewWheelMarkup(views, [], "patient");
+  assert.match(markup, /view-wheel__wedge is-active" data-camera="patient"/);
+  assert.match(markup, /id="view-wheel-label">Patient</);
+  assert.throws(() => buildViewWheelMarkup(views, [], "missing"), /active_view_id/);
 });
 
 test("buildViewWheelMarkup carries destinations beside the camera views", () => {
@@ -259,9 +271,39 @@ test("buildViewWheelMarkup carries destinations beside the camera views", () => 
   assert.equal((markup.match(/data-nav=/g) ?? []).length, 2);
   assert.match(markup, /data-nav="examine"/);
   assert.match(markup, /view-wheel__wedge--action/);
-  // The hub still steps only through views — a destination is chosen, not
-  // cycled onto.
-  assert.match(markup, /aria-label="Next camera view: Patient"/);
+  // The hub opens the choices; it does not silently activate any of them.
+  assert.match(markup, /aria-label="Open camera view menu"/);
+});
+
+test("buildNudgeWheelMarkup is its own wheel, named for the bed rather than the screen", () => {
+  const markup = buildNudgeWheelMarkup();
+
+  ["head", "foot", "left", "right"].forEach((direction) => {
+    assert.ok(
+      markup.includes(`data-nudge="${direction}"`),
+      `the wheel offers a ${direction} nudge`,
+    );
+  });
+  // "Up" means nothing to someone looking at a patient lying down; the
+  // arrows are named for the bed so the label survives any camera angle.
+  assert.ok(markup.includes("Move toward the head of the bed"));
+  assert.ok(markup.includes("Move toward the foot of the bed"));
+  assert.ok(markup.includes("Step around the bed to the left"));
+  // Its own control: no wedges, no camera destinations, no hub stepper.
+  assert.ok(!markup.includes("data-camera"));
+  assert.ok(!markup.includes("view-wheel__wedge"));
+  assert.ok(markup.includes('role="group"'));
+});
+
+test("buildViewWheelMarkup no longer carries the nudges", () => {
+  const markup = buildViewWheelMarkup([
+    { id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff" },
+    { id: "patient", label: "Patient", hint: "Bedside close-up", color: "#2ae0bd" },
+    { id: "monitor", label: "Monitor", hint: "Vitals screen", color: "#ffb84a" },
+  ]);
+  // The view wheel answers "where am I looking"; the nudge wheel answers
+  // "a bit more to the left". One control doing both taught neither.
+  assert.ok(!markup.includes("data-nudge"));
 });
 
 test("buildViewWheelMarkup keeps the wheel within eight wedges", () => {
