@@ -88,12 +88,12 @@ export function createWavePath(heart_rate, width, height, phase) {
  * @example
  * getStatusCopy("critical");
  */
-export function getStatusCopy(status) {
+export function getStatusCopy(status, labels = DEFAULT_LABELS) {
   const messages = {
-    critical: "Immediate support required",
-    unstable: "Response remains time-sensitive",
-    stabilizing: "Physiology is responding",
-    stable: "Immediate threat controlled",
+    critical: labels.copy_critical,
+    unstable: labels.copy_unstable,
+    stabilizing: labels.copy_stabilizing,
+    stable: labels.copy_stable,
   };
   if (!messages[status]) {
     throw new Error(`Unknown patient status: ${status}`);
@@ -331,7 +331,7 @@ export function radialWedgeGeometry(count) {
  * @example
  * buildViewWheelMarkup([{id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff"}, ...]);
  */
-export function buildViewWheelMarkup(views, actions = [], active_view_id = views?.[0]?.id) {
+export function buildViewWheelMarkup(views, actions = [], active_view_id = views?.[0]?.id, labels = DEFAULT_LABELS) {
   if (!Array.isArray(views) || views.length < 3) {
     throw new Error("views must be an array of at least 3 entries.");
   }
@@ -373,20 +373,100 @@ export function buildViewWheelMarkup(views, actions = [], active_view_id = views
     <svg class="view-wheel__rims" viewBox="0 0 300 300" aria-hidden="true">${rim_paths.join("")}</svg>
     ${wedges.join("")}
     <button type="button" class="view-wheel__hub" id="view-wheel-hub" aria-expanded="false"
-      aria-label="Open camera view menu">
-      <small>VIEW</small>
+      aria-label="${escapeHtml(labels.open_view_menu)}">
+      <small>${escapeHtml(labels.view_hub.toUpperCase())}</small>
       <strong id="view-wheel-label">${active_view.label}</strong>
-      <span class="view-wheel__hub-next" id="view-wheel-next">Choose view</span>
+      <span class="view-wheel__hub-next" id="view-wheel-next">${escapeHtml(labels.choose_view)}</span>
     </button>`;
 }
 
 /** The four camera nudges, named for the bed rather than the screen. */
 export const CAMERA_NUDGES = Object.freeze([
-  { direction: "head", glyph: "\u25b2", label: "Move toward the head of the bed", position: "top" },
-  { direction: "left", glyph: "\u25c0", label: "Step around the bed to the left", position: "left" },
-  { direction: "right", glyph: "\u25b6", label: "Step around the bed to the right", position: "right" },
-  { direction: "foot", glyph: "\u25bc", label: "Move toward the foot of the bed", position: "bottom" },
+  { direction: "head", glyph: "\u25b2", label_key: "nudge_head", position: "top" },
+  { direction: "left", glyph: "\u25c0", label_key: "nudge_left", position: "left" },
+  { direction: "right", glyph: "\u25b6", label_key: "nudge_right", position: "right" },
+  { direction: "foot", glyph: "\u25bc", label_key: "nudge_foot", position: "bottom" },
 ]);
+
+/**
+ * Every string the room's chrome shows, in English. A host passes
+ * `labels` (any subset) to `mountPatientRoom` to render the chrome in its
+ * own language; unknown keys are rejected so a typo cannot silently leave
+ * one label untranslated.
+ */
+export const DEFAULT_LABELS = Object.freeze({
+  case_time: "Case time",
+  live_monitor: "Live monitor",
+  ecg_lead: "ECG · Lead II",
+  rhythm_sinus: "Sinus rhythm",
+  rhythm_sinus_tach: "Sinus tachycardia",
+  last_reading: "Last reading",
+  view_trends: "View trends",
+  trends_title: "Vital sign trends",
+  trends_close: "Close trends",
+  trends_note_live: "Recorded from the live monitor feed.",
+  trends_note_reconstructed: "Reconstructed from the clinical timeline of this case.",
+  view_hub: "View",
+  choose_view: "Choose view",
+  open_view_menu: "Open camera view menu",
+  move: "Move",
+  nudge_group: "Move the camera around the bed",
+  nudge_head: "Move toward the head of the bed",
+  nudge_left: "Step around the bed to the left",
+  nudge_right: "Step around the bed to the right",
+  nudge_foot: "Move toward the foot of the bed",
+  status_critical: "Critical",
+  status_unstable: "Unstable",
+  status_stabilizing: "Stabilizing",
+  status_stable: "Stable",
+  copy_critical: "Immediate support required",
+  copy_unstable: "Response remains time-sensitive",
+  copy_stabilizing: "Physiology is responding",
+  copy_stable: "Immediate threat controlled",
+  view_overview: "Overview",
+  view_overview_hint: "Whole room",
+  view_patient: "Patient",
+  view_patient_hint: "Bedside close-up",
+  view_airway: "Airway",
+  view_airway_hint: "Head & airway",
+  view_monitor: "Monitor",
+  view_monitor_hint: "Vitals screen",
+  view_equipment: "Equipment",
+  view_equipment_hint: "O₂ · IV side",
+  finding_close: "Close finding",
+  unavailable_title: "3D view unavailable",
+  unavailable_body: "The clinical controls remain available in dashboard mode.",
+  reduced_visuals: "Reduced visuals · the full patient model could not load",
+  reduced_visuals_live: "The full patient model could not load; showing reduced visuals.",
+  scenario_time: "Scenario time",
+  live_vitals: "Live vital signs",
+  room: "3D patient room",
+  ecg_aria: "Live ECG waveform",
+  camera_views: "Camera views",
+});
+
+/**
+ * Merge a host's label overrides onto the defaults.
+ * @param {Partial<typeof DEFAULT_LABELS>} [overrides] Translated labels.
+ * @return {typeof DEFAULT_LABELS} The complete label set.
+ * @throws {Error} On an unknown key or a non-string value.
+ * @example
+ * resolveLabels({ case_time: "Fallzeit" }).case_time; // "Fallzeit"
+ */
+export function resolveLabels(overrides = {}) {
+  if (overrides === null || typeof overrides !== "object" || Array.isArray(overrides)) {
+    throw new Error("labels must be an object of label overrides.");
+  }
+  Object.entries(overrides).forEach(([key, value]) => {
+    if (!(key in DEFAULT_LABELS)) {
+      throw new Error(`Unknown label: ${key}`);
+    }
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(`Label ${key} must be a non-empty string.`);
+    }
+  });
+  return Object.freeze({ ...DEFAULT_LABELS, ...overrides });
+}
 
 /**
  * A small wheel of four arrows that adjust the camera you are already in.
@@ -403,16 +483,16 @@ export const CAMERA_NUDGES = Object.freeze([
  * @example
  * buildNudgeWheelMarkup();
  */
-export function buildNudgeWheelMarkup() {
+export function buildNudgeWheelMarkup(labels = DEFAULT_LABELS) {
   const arrows = CAMERA_NUDGES.map((nudge) => `
       <button type="button" class="nudge-wheel__arrow nudge-wheel__arrow--${nudge.position}"
-        data-nudge="${escapeHtml(nudge.direction)}" aria-label="${escapeHtml(nudge.label)}">
+        data-nudge="${escapeHtml(nudge.direction)}" aria-label="${escapeHtml(labels[nudge.label_key])}">
         <span aria-hidden="true">${nudge.glyph}</span>
       </button>`);
   return `
-    <div class="nudge-wheel" role="group" aria-label="Move the camera around the bed">
+    <div class="nudge-wheel" role="group" aria-label="${escapeHtml(labels.nudge_group)}">
       ${arrows.join("")}
-      <span class="nudge-wheel__hub" aria-hidden="true">MOVE</span>
+      <span class="nudge-wheel__hub" aria-hidden="true">${escapeHtml(labels.move.toUpperCase())}</span>
     </div>`;
 }
 
@@ -625,7 +705,7 @@ export function buildExamWheelMarkup(region_label, items, options = {}) {
  * @example
  * buildFindingCardMarkup({region_label: "Chest", exam_label: "Auscultation", finding: "Vesicular breath sounds.", abnormal: false});
  */
-export function buildFindingCardMarkup(result) {
+export function buildFindingCardMarkup(result, labels = DEFAULT_LABELS) {
   if (typeof result?.region_label !== "string" || result.region_label.length === 0
     || typeof result.exam_label !== "string" || result.exam_label.length === 0) {
     throw new Error("result needs region_label and exam_label strings.");
@@ -650,7 +730,7 @@ export function buildFindingCardMarkup(result) {
     <header class="finding-card__header">
       <span class="finding-card__kicker"><i aria-hidden="true"></i><span class="finding-card__kicker-text">${escapeHtml(result.region_label)} · ${escapeHtml(result.exam_label)}</span></span>
       ${result.abnormal ? '<span class="finding-card__flag">▲ Abnormal</span>' : ""}
-      <button type="button" class="finding-card__close" id="finding-close" aria-label="Close finding">✕</button>
+      <button type="button" class="finding-card__close" id="finding-close" aria-label="${escapeHtml(labels.finding_close)}">✕</button>
     </header>
     <div class="finding-card__body" aria-live="polite" tabindex="0">
       ${result.error !== undefined

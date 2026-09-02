@@ -5,6 +5,9 @@ import * as THREE from "three";
 
 import {
   BEDSIDE_HEAD_DIRECTIONS,
+  HEAD_REST_POINT,
+  avatarUpAxis,
+  restHeadOnPillow,
   aimBoneAtWorldDirection,
   attachBodyRegions,
   configurePatientAvatar,
@@ -341,13 +344,18 @@ test("configurePatientAvatar normalizes a full-body avatar and records its anima
   assert.equal(patient.name, "patient-avatar");
   assert.strictEqual(patient.getObjectByName("patient-avatar-model"), synthetic.model);
   assertVectorClose(synthetic.model.scale, new THREE.Vector3(1.72, 1.72, 1.72));
-  assertVectorClose(synthetic.model.position, new THREE.Vector3(0, 1.32, 1.43));
   assert.ok(Math.abs(synthetic.model.rotation.x + Math.PI / 2) < 1e-12);
+  // Placed by where the head lands, not by the model's origin.
+  patient.updateMatrixWorld(true);
+  assertVectorClose(
+    patient.getObjectByName("Head").getWorldPosition(new THREE.Vector3()),
+    HEAD_REST_POINT,
+  );
   assert.deepEqual(patient.userData.interactive, {
     id: "patient",
     label: "Assess Daniel Moreau",
   });
-  assert.equal(patient.userData.avatar_source, "Rohy AvatarSDK full-body GLB");
+  assert.equal(patient.userData.avatar_source, "rigged full-body GLB (Y-up)");
 
   [synthetic.head_mesh, synthetic.body_mesh, synthetic.clothing_mesh].forEach((mesh) => {
     assert.equal(mesh.castShadow, true);
@@ -817,7 +825,7 @@ test("loadPatientAvatar retries a transient failure and then succeeds", async (t
   const patient = await loadPatientAvatar("/avatar.glb", loader, { retry_delay_ms: 1 });
   assert.equal(call_count, 2, "the loader should be retried exactly once after one failure");
   assert.ok(patient.getObjectByName("patient-avatar-model"));
-  assert.equal(patient.userData.avatar_source, "Rohy AvatarSDK full-body GLB");
+  assert.equal(patient.userData.avatar_source, "rigged full-body GLB (Y-up)");
 });
 
 test("loadPatientAvatar exhausts its attempts and propagates the final failure", async (t) => {
@@ -1166,4 +1174,55 @@ test("updateRiggedPatient layers a decaying wince over the ambient face drive", 
 test("bedside head directions are exactly right (default) and left", () => {
   assert.deepEqual([...BEDSIDE_HEAD_DIRECTIONS], ["right", "left"]);
   assert.ok(Object.isFrozen(BEDSIDE_HEAD_DIRECTIONS));
+});
+
+// A body whose geometry stands along +Z (a Z-up export with no reorienting
+// node) must still be laid head-to-pillow (-Z), face up, rather than
+// through the mattress.
+test("configurePatientAvatar lays a Z-up avatar on the bed head-to-pillow, face up", () => {
+  const synthetic = createSyntheticAvatar();
+  const z_up = new THREE.Group();
+  synthetic.model.rotation.x = Math.PI / 2;
+  z_up.add(synthetic.model);
+  assert.equal(avatarUpAxis(z_up), "z");
+
+  const patient = configurePatientAvatar(z_up);
+  assert.equal(patient.userData.avatar_up_axis, "z");
+  assert.ok(Math.abs(z_up.rotation.x - Math.PI) < 1e-12);
+  patient.updateMatrixWorld(true);
+  const head = new THREE.Vector3();
+  const hips = new THREE.Vector3();
+  patient.getObjectByName("Head").getWorldPosition(head);
+  patient.getObjectByName("Hips").getWorldPosition(hips);
+  assert.ok(head.z < hips.z - 0.5, `head z ${head.z} must be well beyond hips z ${hips.z}`);
+  assertVectorClose(head, HEAD_REST_POINT);
+});
+
+// Two bodies of different height end up with their heads in the same
+// place: that is the whole point of placing by the head.
+test("restHeadOnPillow puts a short and a tall avatar's head on the same spot", () => {
+  // configurePatientAvatar sets the root scale itself, so the short body
+  // is scaled one level down, inside a wrapper.
+  const short = new THREE.Group();
+  const short_body = createSyntheticAvatar().model;
+  short_body.scale.setScalar(0.8);
+  short.add(short_body);
+  const tall = createSyntheticAvatar().model;
+  const heads = [short, tall].map((model) => {
+    const patient = configurePatientAvatar(model);
+    return patient.getObjectByName("Head").getWorldPosition(new THREE.Vector3());
+  });
+  assertVectorClose(heads[0], HEAD_REST_POINT);
+  assertVectorClose(heads[1], HEAD_REST_POINT);
+  // And a rig with no head bone is left where the fixed placement put it.
+  const headless = new THREE.Group();
+  headless.add(new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.7, 0.3)));
+  const patient = new THREE.Group();
+  patient.add(headless);
+  assert.equal(restHeadOnPillow(patient, headless), null);
+});
+
+test("avatarUpAxis reads the long axis from geometry and rejects non-objects", () => {
+  assert.equal(avatarUpAxis(createSyntheticAvatar().model), "y");
+  assert.throws(() => avatarUpAxis({}), /must be a THREE.Object3D/);
 });

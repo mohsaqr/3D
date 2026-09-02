@@ -414,3 +414,232 @@ Phase 0 is one focused session in this repo. Phase 1 is one session in Rohy
 (wrapper, room registration, asset URL, telemetry). Phase 2 and 3 are each
 independent follow-ups. Nothing in Phase 0–1 blocks continued standalone
 development of this prototype.
+
+## Phase ADVANCED — Port to Rohy's `advanced` line as a real plugin, one conversation stream (investigated 2026-09-02; **P0 + P1-conversation + P2 IMPLEMENTED 2026-09-02** in the `rohy-3d-advanced` worktree, uncommitted)
+
+User ask: embed in Rohy; the patient conversation is ONE stream across the
+chat room and the 3D room; the 3D room is the SECOND room; it lives on the
+`advanced` line; it is a plugin. Three read-only investigations (git
+topology, plugin/room architecture, conversation path) plus direct reads of
+`advanced`'s `App.jsx`, `RoomNavigator.jsx`, `plugins/context.js`.
+
+### Findings
+
+1. **`advanced` is a tag, not a branch** — `refs/tags/advanced` = c7cb6a8
+   (v2.9.144, 2026-08-31), an ancestor of `main` (9014597, 4 commits later).
+   The plugin branch `plugin/3d-room` (edccdc8) sits on `release/2.9`
+   (fd67442), which `advanced` does NOT contain. Merge base 80828226. This is
+   a **port, not a merge**: `git merge-tree advanced plugin/3d-room` conflicts
+   in 7 files (`App.jsx`, `RoomNavigator.jsx`, `PatientMonitor.jsx`,
+   `OrdersDrawer.jsx`, `ManikinPanel.jsx`, `plugins/registry.js` add/add,
+   `deploy/docker/Dockerfile` — the last only because of fd67442's
+   dynajs→ladyna repoint, which the plugin does not need).
+2. **`advanced` already ships a plugin standard (RPS-1)** — `src/plugins/`
+   with `registry.js` (164 lines, validates against generated manifests and
+   THROWS on an unregistered id), `PluginRoom.jsx` (generic mount),
+   `context.js` (narrowed host context: session, case data, eventLogger,
+   store, t, navigate, optional `orders`), three shipped plugins (`ecg`,
+   `pacs`, `pathology`), `npm run plugins:gen` / `plugins:check` wired into
+   `prebuild`. A manifest declares `room: { key, labelKey, subKey, icon,
+   accent, order }`, `vocabulary`, `capabilities`, `minRole`. The branch's
+   private `config.js` + 9-line `registry.js` must be **discarded**, not
+   ported.
+3. **Second room is one number** — core orders are chat 10, examination 20,
+   lab 30, radiology 40, consultant 90; plugins default 50 and everything is
+   sorted. `order: 15` makes the 3D room second. `RoomNavigator` allows only
+   icons/accents from its allowlists, so a `Bed` icon entry is one additive
+   core line. Labels go through `t(labelKey)` with no default fallback on
+   `advanced`: `room_exam3d` / `room_exam3d_sub` need entries in all 7
+   locales.
+4. **The blocking fact: on `advanced`, an active plugin room REPLACES the chat
+   layout** (`App.jsx` ternary → `<PluginRoom>`), so `PatientMonitor` (the
+   only physiology engine, client-side) and `ChatInterface` (the persona
+   cache `lastPatientPrompt`) unmount. The current 3D room exists only as an
+   overlay that keeps both mounted and `inert`, with a capture-phase Space
+   shield. Ported as-is, the room would show frozen vitals and refuse to talk.
+   Two ways out: (a) add a generic `coversChat` overlay mode to the host —
+   small, but it carries the inert/Space hacks forward; (b) hoist physiology
+   (Phase C, `PhysiologyProvider`) and the patient conversation to session
+   scope. (b) is what "one stream" requires anyway.
+5. **One stream does not exist today** — `messages` is `useState` inside
+   ChatInterface; the room keeps its own `historyRef` seeded once from
+   `GET /interactions/:id`. Consequences, all verified in code: a room turn
+   never appears in the chat transcript, and on reload `rohy_chat_history`
+   (localStorage) wins over `/interactions`, so room turns are **silently
+   dropped** from the visible transcript although they are in the DB; a
+   chat turn made while the room is open never reaches the room; room turns
+   omit `agentTemplateId`, `studentAffect` and the `obtained('history', …)`
+   PatientRecord write; the room logs EventLogger with a literal `'Room3D'`
+   component that is not in the vocabulary. `interactions` has no
+   source/room column. There is no SSE/WebSocket fan-out anywhere in Rohy.
+6. **Host stance on LLM grants** (`App.jsx`, `context.js`): plugins are
+   refused `llm` precisely because `LLMService` writes into the PATIENT
+   transcript. For this plugin that is the intent — so it needs its own
+   narrowed capability (`patientConversation`), not the generic LLM grant.
+7. **Packaging**: `"rohy-3d-patient-room": "file:../3D"` is a sibling
+   symlink, uninstallable elsewhere; the lockfile still records 0.2.0
+   (package is 0.4.0). The branch's `vite.config.js` carries worktree-local
+   ports (5273/3100) that must not be ported; `resolve.dedupe: ['three']`
+   must be kept alongside `advanced`'s onnxruntime alias. `three ^0.184` is
+   already on `advanced`.
+8. Loose ends riding in the branch: vendored `patientFigure.js` (to delete
+   once Cardoyon is vendored), an `AuscultationPanel` progress-bar fix that
+   is a 2D-room behaviour change, and the uncommitted `PatientVisual.jsx`
+   import of a plugin internal (`usePatientAvatar`) — a reverse dependency
+   the committed branch never had. The bedside portrait is opt-in and off.
+
+### Proposed shape (for decision, not started)
+
+- **P0 — branch and skeleton.** New branch from tag `advanced` (or `main`,
+  4 commits later — user to choose). Hand-port the 25 plugin-owned files and
+  the 3 core files untouched on `advanced` (`VoiceControl`,
+  `AuscultationPanel`, `FindingDisplay`) verbatim. Add
+  `src/plugins/room3d/manifest.js` (`order: 15`, `capabilities`,
+  `vocabulary` incl. a proper `room3d` component), register through
+  `index.jsx`, `plugins:gen`, `Bed` icon, locale keys. Re-do the
+  `usePhysicalExam` extraction against `advanced`'s `ManikinPanel` (it now
+  persists findings via `POST /sessions/:id/exam-findings` inside the very
+  callback being extracted) and the `ecgWaveform` extraction against the
+  rewritten rhythm code. Re-apply the 4-line `OrdersDrawer` props.
+- **P1 — session-scope providers (core, plugin-agnostic).**
+  `PhysiologyProvider` (Phase C) so vitals live above rooms;
+  `PatientConversationProvider` (Option A): messages, persona assembly,
+  streaming send, TTS session, persistence, restore from `/interactions`
+  (not localStorage-first). `ChatInterface` becomes a view. Add a `source`
+  column to `interactions` (typed vs spoken vs room) so the educator
+  transcript and analytics can tell them apart. Highest-risk step:
+  `ChatInterface.test.jsx` / `.behavior.test.jsx` (18 MSW cases) need the
+  provider in `renderWithProviders`; `PatientMonitor`'s tests must stay green.
+- **P2 — the plugin consumes grants.** Manifest requests `vitals` and
+  `patientConversation`; the host grants narrowed adapters (`send(text)`,
+  `subscribe(cb)`, `speaking`, `visemes`, `vitals`). Delete
+  `lastPatientPrompt` as a channel, the room's `historyRef`, the duplicate
+  sentence queue, the Space shield and the `inert` columns. The room is then
+  a normal `PluginRoom`, no overlay.
+- **P3 — packaging.** npm workspace (`packages/3d-patient-room`) or git dep;
+  drop the worktree ports; CI single-`three` guard; e2e: open room → speak →
+  turn visible in chat.
+
+Alternatives considered: Option B (room drives ChatInterface by ref) —
+lowest test risk, worst boundary, keeps the overlay fragility; Option C
+(server SSE per session) — cleanest boundary, but Rohy has no push
+infrastructure and `/proxy/llm` is stateless by design; too big for the
+gain while single-tab is the norm.
+
+### What was built (2026-09-02, worktree `../rohy-3d-advanced`, branch `plugin/3d-room-advanced` from tag `advanced`)
+
+User decision: branch from the TAG (`advanced`, v2.9.144), not main.
+
+- **P0 done.** 25 plugin-owned files and the 3 untouched core files ported
+  verbatim; `ChatInterface`/`OrdersDrawer`/`vite.config` hunks 3-way
+  applied; `ManikinPanel`, `PatientMonitor`, `OrdersDrawer` hand-merged.
+  `usePhysicalExam` now carries advanced's `POST /sessions/:id/exam-findings`
+  persist, so bedside exams reach the case summary. Manifest
+  `src/plugins/room3d/manifest.js` (id `room3d`, `order: 15` = second room,
+  `presentation: 'overlay'`, capabilities `case` / `conversation` / `drawer`),
+  adapter `index.jsx`, `plugins:gen` run, `Bed` icon, locale keys in 7
+  languages + status sidecar. The branch's `config.js`/`registry.js` were
+  discarded; the bedside portrait was NOT ported (user rejected it; the
+  package keeps the API).
+- **P1, conversation half, done.** `src/contexts/PatientConversationContext.jsx`:
+  ChatInterface stays the owner of the turn and publishes `messages`,
+  `loading`, `voiced`, `sessionId` + registers its send handler; the host
+  narrows that to the `conversation` grant. `handleSendToPatient(text,
+  meta)` takes `source` ('typed' | 'voice' | plugin id — stamped on the
+  message and persisted via `interactions.source`, migration 0053) and
+  `spoken` (voice the reply for a spoken question even with chat voice mode
+  off). **Physiology hoist (Phase C) NOT done**: the room stays an overlay
+  (`presentation: 'overlay'` is a generic host mode now — the chat layout
+  is mounted and inert beneath any plugin that declares it).
+- **P2 done.** `useRoomConversation` is `ask → conversation.send(text,
+  {source:'room3d', spoken})` + caption from the shared transcript; the
+  room reads VoiceContext `speaking`/`visemes` for the mouth; the persona
+  cache, private history, duplicate sentence queue and `'Room3D'` literal
+  are gone. `PluginRoom` layers the live conversation grant on top of its
+  memoised context (it used to freeze grants at mount — caught live: the
+  room said "not ready" after a reload).
+- **Verified live** (fresh DB, LLM settings copied from the old dev DB):
+  typed turn → captioned at the bedside; bedside turn → in the chat
+  transcript; `interactions.source` rows `typed` / `room3d`; a reply the
+  chat could not voice is still shown at the bedside (`voiced: false`).
+  Screenshots `tmp/adv-0{1..4}-*.png`.
+- **Not done / open**: P3 packaging (still `file:../3D`); Phase C; audio
+  arbitration (V3); the subtitle band can overlap the mic pill on a long
+  line (pre-existing layout); the microphone itself was driven through the
+  control's send handler in headless Chrome, not a real recogniser.
+
+### Release testing (2026-09-02) — four Opus testers, then the fix batch
+
+Testers: end-to-end conversation flow (Playwright), code review of the diff,
+regression of the untouched rooms + full suite, robustness/lifecycle. Every
+finding with a repro was fixed the same day; the rest is recorded here.
+
+Fixed (host/plugin, in `../rohy-3d-advanced`):
+- BLOCKER i18n: the room's own strings (nav wheel, spoken exam reactions,
+  voice control, captions' speaker labels, conversation errors, case
+  placeholders, finding/manikin aria) and the PACKAGE chrome (clock, monitor,
+  rhythm, status chip, view/nudge wheels, trends, finding card, fallbacks)
+  now come from a `room3d` namespace (78 keys × 7 locales, en-XA generated)
+  passed to `mountPatientRoom({ labels })`; rhythm labels go through the
+  monitor's `RHYTHM_LABEL_KEYS`. Verified live in German (`tmp/adv-05-room3d-german.png`).
+- Two overlapping bedside turns persisted interleaved and the second lost the
+  first from its prompt → `turnInFlightRef` in ChatInterface; a bus caller
+  gets a rejection (`patient_turn_in_flight`), the chat's own path stays
+  silent; `GET /interactions` orders by `timestamp, id`.
+- `source` was dropped on restore and rode into the LLM payload → kept on
+  restore and on the assistant message; `wireMessages()` sends role+content.
+- `patientCase` was the host's live object → `frozenCopy()` (deep-frozen
+  JSON copy) in `createPluginContext`.
+- `voiced` never reset → published `null` at the end of every turn; the
+  room applies the chat's verdict only to captions that came from the bus.
+- three.js in the boot chunk → `React.lazy` screen behind a function
+  component (the registry wants a function).
+- `room.presentation` unvalidated → `ROOM_PRESENTATIONS` in
+  `validateManifest`, documented in the manifest contract.
+- Navigator gutter lost to `.rohy3d-root { position: relative }` → a
+  positioned slot wraps the host (and the package rule is `:where`).
+- Subtitle band over the mic → `maxLines={3}` on SubtitleBand, anchor 360 px.
+- OrdersDrawer: backdrop confined by the panel's `translate` → sibling
+  backdrop (z-40, click-outside works, room dims), Escape closes, close
+  button has an aria-label, closed panel is `inert` (its catalogue was in
+  the tab order from inside the room).
+- Stale `openRequest` replayed on remount → drawer reports consumption,
+  App clears it.
+- Space captured while the manikin is open / on links and role=button.
+- Component naming: the room stamps `room3d` (= plugin id) everywhere.
+- `sendRef` written in an effect; `src/storage/registry.test.js` given a
+  20 s budget (a grep over src that timed out under load).
+- New tests: interactions `source` validation, `room.presentation`,
+  `wireMessages`, frozen case grant, drawer request handshake, bus-driven
+  turn + in-flight guard (ChatInterface), Z-up posing, head rest, labels.
+
+Fixed (package, `3D/`): GL context release, head-on-pillow placement,
+Z-up detection, `labels` option, `:where` root, NUL escapes.
+
+Recorded, not fixed (pre-existing or out of scope): localStorage beats the
+DB on transcript restore; the case greeting is never persisted; the client
+asserts its own `source`; `physical_exam_findings` has no room column;
+AuscultationPanel logs auto-play twice under StrictMode (dev only);
+`patientFigure.js` duplicates the ecg plugin's copy (core must not import a
+plugin's vendored file — the header should say so); a missing
+`rohy-3d-patient-room` link is a build failure, not a caught plugin load
+failure; the room reaches host singletons (`VoiceService`, `EventLogger`,
+`useVoice`) that a stricter RPS-1 would want as grants; no exit from the
+room except the navigator; the rAF loop does not throttle when hidden.
+
+### P3 packaging — DONE 2026-09-02 (release 3.0.0 prep)
+
+The package stays a sibling clone (`file:../3D`), the same shape as
+`dynajs`, rather than a git dependency or an npm workspace: it needs no
+build step, the deploy tooling already knows the sibling pattern, and the
+repo is private (a git URL in package.json would put a credential in the
+lockfile). Wired in Rohy: `deploy/preflight.sh` step 9,
+`scripts/verify-room3d-install.mjs` in `prebuild` (a missing sibling fails
+the build with the reason, instead of a Rollup resolve error),
+`deploy/bundle-airgap.sh --with-3d`, Docker `ROOM3D_GIT_URL` /
+`ROOM3D_GIT_REF` (credentialed URL for the private repo), README /
+INSTALL / operator install docs. Package version 1.0.0.
+
+Release steps left to the user: commit + push this package (the Docker
+build clones it), then in Rohy `npm version major` (commit + tag v3.0.0)
+on the branch they choose to release from, then push.

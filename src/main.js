@@ -27,6 +27,9 @@ import {
   examWheelItems,
   formatElapsed,
   getStatusCopy,
+  DEFAULT_LABELS,
+  resolveLabels,
+  escapeHtml,
   sampleTrendRows,
   vitalSeverity,
 } from "./ui-helpers.js";
@@ -70,12 +73,20 @@ const PATIENT_STATUSES = Object.freeze(["critical", "unstable", "stabilizing", "
 
 // The radial view wheel's wedges; keys 1-5 map to this order.
 const CAMERA_VIEWS = Object.freeze([
-  { id: "overview", label: "Overview", hint: "Whole room", color: "#5aa9ff" },
-  { id: "patient", label: "Patient", hint: "Bedside close-up", color: "#2ae0bd" },
-  { id: "airway", label: "Airway", hint: "Head & airway", color: "#b18cff" },
-  { id: "monitor", label: "Monitor", hint: "Vitals screen", color: "#ffb84a" },
-  { id: "equipment", label: "Equipment", hint: "O₂ · IV side", color: "#4ecbe0" },
+  { id: "overview", label_key: "view_overview", color: "#5aa9ff" },
+  { id: "patient", label_key: "view_patient", color: "#2ae0bd" },
+  { id: "airway", label_key: "view_airway", color: "#b18cff" },
+  { id: "monitor", label_key: "view_monitor", color: "#ffb84a" },
+  { id: "equipment", label_key: "view_equipment", color: "#4ecbe0" },
 ]);
+
+// The camera views with their labels resolved in the host's language.
+const cameraViews = (labels) => CAMERA_VIEWS.map((view) => ({
+  id: view.id,
+  color: view.color,
+  label: labels[view.label_key],
+  hint: labels[`${view.label_key}_hint`],
+}));
 
 // Fixed accent and glyph per examination technique so the exam wheel reads
 // consistently across regions; color is never the only channel — every wedge
@@ -207,7 +218,7 @@ export function uiIcon(name) {
  * @example
  * buildAppMarkup(groupActions());
  */
-export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode = "standalone", waveform = "internal", features = {}, nav_actions = [], initial_view = "patient") {
+export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode = "standalone", waveform = "internal", features = {}, nav_actions = [], initial_view = "patient", labels = DEFAULT_LABELS) {
   const bound = mode === "bound";
   const slim = Boolean(features.slim_chrome);
   const action_markup = Object.entries(grouped_actions)
@@ -229,16 +240,16 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
 
   return `
     <main class="simulator${bound ? " simulator--bound" : ""}${slim ? " simulator--embedded" : ""}" data-status="critical">
-      <section class="stage" aria-label="3D patient room">
+      <section class="stage" aria-label="${escapeHtml(labels.room)}">
         <div class="stage__canvas" id="scene-root"></div>
         <div class="stage__wash" aria-hidden="true"></div>
         <div class="webgl-fallback" id="webgl-fallback" hidden>
           <span>${uiIcon("alert")}</span>
-          <strong>3D view unavailable</strong>
-          <p>The clinical controls remain available in dashboard mode.</p>
+          <strong>${escapeHtml(labels.unavailable_title)}</strong>
+          <p>${escapeHtml(labels.unavailable_body)}</p>
         </div>
         <div class="avatar-notice" id="avatar-notice" hidden role="status">
-          ${uiIcon("alert")} Reduced visuals · the full patient model could not load
+          ${uiIcon("alert")} ${escapeHtml(labels.reduced_visuals)}
         </div>
 
         <header class="topbar">
@@ -250,13 +261,13 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
             <span class="eyebrow">${patient.location}</span>
             <h1>${patient.case_title}</h1>
           </div>
-          ${buildNudgeWheelMarkup()}
+          ${buildNudgeWheelMarkup(labels)}
           <div class="topbar__status">
             <div class="status-chip status-chip--critical" id="status-chip">
-              <span></span><strong>Critical</strong><small>Immediate support required</small>
+              <span></span><strong>${escapeHtml(labels.status_critical)}</strong><small>${escapeHtml(labels.copy_critical)}</small>
             </div>
-            <div class="clock" aria-label="Scenario time">
-              <small>CASE TIME</small><strong id="case-time">00:00</strong>
+            <div class="clock" aria-label="${escapeHtml(labels.scenario_time)}">
+              <small>${escapeHtml(labels.case_time.toUpperCase())}</small><strong id="case-time">00:00</strong>
             </div>
             <div class="topbar__actions">
               ${bound ? "" : `<button class="icon-button" id="pause-button" type="button" aria-label="Pause simulation">${uiIcon("pause")}</button>
@@ -283,15 +294,15 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
           <button class="text-button" id="brief-button" type="button">View scenario brief <span>↗</span></button>
         </aside>`}
 
-        <aside class="monitor-panel glass-panel" aria-label="Live vital signs">
+        <aside class="monitor-panel glass-panel" aria-label="${escapeHtml(labels.live_vitals)}">
           <div class="monitor-header">
-            <div><span class="live-dot"></span><strong>LIVE MONITOR</strong></div>
+            <div><span class="live-dot"></span><strong>${escapeHtml(labels.live_monitor.toUpperCase())}</strong></div>
             <span>${patient.bed_label}</span>
           </div>
           <div class="ecg-block">
-            <div class="ecg-label"><span>ECG · LEAD II</span><b id="rhythm-label">Sinus tachycardia</b></div>
+            <div class="ecg-label"><span>${escapeHtml(labels.ecg_lead.toUpperCase())}</span><b id="rhythm-label">${escapeHtml(labels.rhythm_sinus_tach)}</b></div>
             ${waveform === "host"
-              ? `<canvas class="ecg ecg--host" id="ecg-canvas" width="640" height="96" role="img" aria-label="Live ECG waveform"></canvas>`
+              ? `<canvas class="ecg ecg--host" id="ecg-canvas" width="640" height="96" role="img" aria-label="${escapeHtml(labels.ecg_aria)}"></canvas>`
               : `<svg class="ecg" viewBox="0 0 640 96" preserveAspectRatio="none" role="img" aria-label="Animated ECG waveform">
               <defs><linearGradient id="wave-glow" x1="0" x2="1"><stop stop-color="#2ae0bd"/><stop offset="1" stop-color="#9ff9df"/></linearGradient></defs>
               <path class="ecg-grid" d="M0 24H640M0 48H640M0 72H640 M40 0V96M80 0V96M120 0V96M160 0V96M200 0V96M240 0V96M280 0V96M320 0V96M360 0V96M400 0V96M440 0V96M480 0V96M520 0V96M560 0V96M600 0V96"/>
@@ -306,11 +317,11 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
             <div class="vital vital--wide" id="vital-temperature"><span>TEMP</span><strong data-vital-value>37.8</strong><small>°C</small><i>ORAL</i></div>
           </div>
           <div class="monitor-footer">
-            <span id="last-reading">Last reading · now</span>
+            <span id="last-reading">${escapeHtml(labels.last_reading)} · 00:00</span>
             <span class="monitor-footer__actions">
               ${features.records ? `<button type="button" id="records-button">Records</button>` : ""}
               ${features.treatments ? `<button type="button" id="treatments-button">Treatments</button>` : ""}
-              <button type="button" id="trend-button">View trends</button>
+              <button type="button" id="trend-button">${escapeHtml(labels.view_trends)}</button>
             </span>
           </div>
         </aside>
@@ -321,7 +332,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <div class="region-hover-label" id="region-hover-label" hidden></div>
 
         <div class="view-wheel" id="view-wheel" data-active="${initial_view}" aria-label="Camera views">
-          ${buildViewWheelMarkup(CAMERA_VIEWS, nav_actions, initial_view)}
+          ${buildViewWheelMarkup(cameraViews(labels), nav_actions, initial_view, labels)}
         </div>
 
         ${features.exam ? `
@@ -400,12 +411,12 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
           <div class="trends-card__header">
             <div>
               <span class="eyebrow">${patient.bed_label} · Case trends</span>
-              <h2 id="trends-title">Vital sign trends</h2>
+              <h2 id="trends-title">${escapeHtml(labels.trends_title)}</h2>
             </div>
-            <button class="icon-button" id="trends-close" type="button" aria-label="Close trends">✕</button>
+            <button class="icon-button" id="trends-close" type="button" aria-label="${escapeHtml(labels.trends_close)}">✕</button>
           </div>
           <div id="trends-body" class="trends-body"></div>
-          <p class="trends-note">${bound ? "Recorded from the live monitor feed." : "Reconstructed from the clinical timeline of this case."}</p>
+          <p class="trends-note">${escapeHtml(bound ? labels.trends_note_live : labels.trends_note_reconstructed)}</p>
         </article>
       </div>
 
@@ -505,6 +516,8 @@ export function mountPatientRoom(container, options = {}) {
   if (!["full", "room"].includes(chrome)) {
     throw new Error(`Unknown chrome mode: ${chrome}`);
   }
+  // The chrome's strings, in the host's language (see DEFAULT_LABELS).
+  const labels = resolveLabels(options.labels ?? {});
   if (options.on_event !== undefined && typeof options.on_event !== "function") {
     throw new Error("options.on_event must be a function.");
   }
@@ -608,6 +621,7 @@ export function mountPatientRoom(container, options = {}) {
     features,
     nav_actions,
     initial_view,
+    labels,
   );
   const root = container;
 
@@ -754,7 +768,7 @@ export function mountPatientRoom(container, options = {}) {
     return exam_regions.get(exam_region_order[(index + 1) % exam_region_order.length]) ?? null;
   };
 
-  const examLogKey = (region_id, exam_id, test) => `${region_id} ${exam_id} ${test ?? ""}`;
+  const examLogKey = (region_id, exam_id, test) => `${region_id}\u0000${exam_id}\u0000${test ?? ""}`;
   const techniqueStyle = (exam_id) => EXAM_TECHNIQUE_STYLE[exam_id] ?? DEFAULT_TECHNIQUE_STYLE;
   const performedByExam = (region_id) => {
     const performed = {};
@@ -853,7 +867,7 @@ export function mountPatientRoom(container, options = {}) {
     // A close armed within the last 220 ms must not hide this new card.
     window.clearTimeout(finding_hide_timeout);
     timers.timeouts.delete(finding_hide_timeout);
-    exam_elements.card.innerHTML = buildFindingCardMarkup(presentation);
+    exam_elements.card.innerHTML = buildFindingCardMarkup(presentation, labels);
     exam_elements.card.dataset.severity = presentation.abnormal ? "abnormal" : "normal";
     exam_elements.card.style.setProperty("--exam-color", techniqueStyle(exam_id).color);
     exam_elements.card.hidden = false;
@@ -1141,7 +1155,7 @@ export function mountPatientRoom(container, options = {}) {
           elements.live_region.textContent = "Rigged full-body patient loaded.";
         } else {
           elements.avatar_notice.hidden = false;
-          elements.live_region.textContent = "The full patient model could not load; showing reduced visuals.";
+          elements.live_region.textContent = labels.reduced_visuals_live;
         }
       });
     })
@@ -1194,7 +1208,7 @@ export function mountPatientRoom(container, options = {}) {
       vital_element.dataset.severity = vitalSeverity(vital_name, severity_value);
     });
     root.querySelector("#rhythm-label").textContent = rhythm_override
-      ?? (vitals.heart_rate > 100 ? "Sinus tachycardia" : "Sinus rhythm");
+      ?? (vitals.heart_rate > 100 ? labels.rhythm_sinus_tach : labels.rhythm_sinus);
   };
 
   const showResult = () => {
@@ -1217,7 +1231,7 @@ export function mountPatientRoom(container, options = {}) {
     elements.simulator.dataset.status = current_status;
     elements.time.textContent = formatElapsed(state.elapsed_seconds);
     elements.status.className = `status-chip status-chip--${current_status}`;
-    elements.status.innerHTML = `<span></span><strong>${current_status}</strong><small>${getStatusCopy(current_status)}</small>`;
+    elements.status.innerHTML = `<span></span><strong>${escapeHtml(labels[`status_${current_status}`] ?? current_status)}</strong><small>${escapeHtml(getStatusCopy(current_status, labels))}</small>`;
     if (elements.patient_state_dot) {
       elements.patient_state_dot.textContent = current_status === "stable" ? "● STABLE" : current_status === "stabilizing" ? "● RESPONDING" : "● HIGH ACUITY";
     }
@@ -1231,7 +1245,7 @@ export function mountPatientRoom(container, options = {}) {
     renderVitals(vitals);
     renderObjectives();
     renderTimeline();
-    elements.last_reading.textContent = `Last reading · ${formatElapsed(state.elapsed_seconds)}`;
+    elements.last_reading.textContent = `${labels.last_reading} · ${formatElapsed(state.elapsed_seconds)}`;
     scene_controller?.update(current_status, vitals, state.elapsed_seconds);
 
     root.querySelectorAll("[data-action]").forEach((button) => {
@@ -1317,7 +1331,7 @@ export function mountPatientRoom(container, options = {}) {
     timers.timeouts.add(wheel_close_timeout);
   };
   const setActiveView = (view_id) => {
-    const view = CAMERA_VIEWS.find((candidate) => candidate.id === view_id);
+    const view = cameraViews(labels).find((candidate) => candidate.id === view_id);
     if (!view) return;
     const changed = view_wheel.dataset.active !== view.id;
     root.querySelectorAll("[data-camera]").forEach((camera_button) => {

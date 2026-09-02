@@ -1515,6 +1515,38 @@ async function runSmoke(client, app_url, report) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: 1440, height: 900, deviceScaleFactor: 2, mobile: false,
   });
+  // The chrome speaks the host's language: a labels override must reach the
+  // DOM, and a mistyped key must be refused rather than silently ignored.
+  const labelled = await client.evaluate(`(async () => {
+    const { mountPatientRoom } = await import("/src/main.js");
+    const host = document.createElement("div");
+    host.style.cssText = "width:900px;height:600px;position:fixed;left:-2000px;top:0";
+    document.body.appendChild(host);
+    const controller = mountPatientRoom(host, { chrome: "room", mode: "bound", labels: { case_time: "Fallzeit", move: "Bewegen", view_trends: "Verläufe anzeigen" } });
+    const text = (selector) => host.querySelector(selector)?.textContent?.trim() ?? null;
+    const result = {
+      clock: text(".clock small"),
+      move: text(".nudge-wheel__hub"),
+      trends: text("#trend-button"),
+      monitor: text(".monitor-header strong"),
+    };
+    let refused = null;
+    try {
+      mountPatientRoom(document.createElement("div"), { chrome: "room", mode: "bound", labels: { case_tme: "x" } });
+    } catch (error) {
+      refused = error.message;
+    }
+    controller.dispose();
+    host.remove();
+    return { ...result, refused };
+  })()`);
+  assert.equal(labelled.clock, "FALLZEIT", "A labels override must render in the clock.");
+  assert.equal(labelled.move, "BEWEGEN", "A labels override must render in the nudge wheel.");
+  assert.equal(labelled.trends, "Verläufe anzeigen", "A labels override must render on the trends button.");
+  assert.equal(labelled.monitor, "LIVE MONITOR", "Unset labels keep their English default.");
+  assert.match(labelled.refused ?? "", /Unknown label: case_tme/, "A mistyped label key must be refused.");
+  report.checks.push("the room chrome renders in a host's labels and refuses unknown label keys");
+
   const bedside = await client.evaluate(`(async () => {
     const { mountBedsideView } = await import("/src/main.js");
     const host = document.createElement("div");

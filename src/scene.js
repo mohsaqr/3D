@@ -527,8 +527,20 @@ export function configurePatientAvatar(model) {
   const patient = new THREE.Group();
   patient.name = "patient-avatar";
   model.name = "patient-avatar-model";
+  // Which way is this body long? The TalkingHead / AvatarSDK GLBs stand
+  // along +Y (glTF's convention); Rohy's RocketBox exports stand along +Z
+  // (a Z-up authoring tool, never re-oriented). One supine transform for
+  // both put the RocketBox patients on the bed as a head and a hand —
+  // the torso and legs were pointing through the mattress.
+  const up_axis = avatarUpAxis(model);
   model.scale.setScalar(1.72);
-  model.rotation.x = -Math.PI / 2;
+  if (up_axis === "z") {
+    // Z-up, facing -Y: half a turn about X lays it head-to-the-pillow
+    // (-Z) with the face up (+Y).
+    model.rotation.set(Math.PI, 0, 0);
+  } else {
+    model.rotation.set(-Math.PI / 2, 0, 0);
+  }
   model.position.set(0, 1.32, 1.43);
   patient.add(model);
 
@@ -564,6 +576,7 @@ export function configurePatientAvatar(model) {
 
   patient.updateMatrixWorld(true);
   poseAvatarInBed(patient);
+  restHeadOnPillow(patient, model);
 
   const rig = {
     model,
@@ -579,9 +592,60 @@ export function configurePatientAvatar(model) {
   rig.left_shoulder_rest_quaternion = rig.left_shoulder?.quaternion.clone() ?? null;
   rig.right_shoulder_rest_quaternion = rig.right_shoulder?.quaternion.clone() ?? null;
   patient.userData.avatar_rig = rig;
-  patient.userData.avatar_source = "Rohy AvatarSDK full-body GLB";
+  patient.userData.avatar_up_axis = up_axis;
+  patient.userData.avatar_source = `rigged full-body GLB (${up_axis.toUpperCase()}-up)`;
   tagInteractive(patient, "patient", "Assess Daniel Moreau");
   return patient;
+}
+
+// Where a patient's head rests: on the pillow (centre z -1.66, top ~1.40),
+// a little toward the foot so the crown is not in the headboard. Every
+// avatar in the catalogue is a different height with a different origin;
+// placing them all by origin left a short patient's head under the pillow
+// edge and a tall one's crown in the wall.
+export const HEAD_REST_POINT = Object.freeze(new THREE.Vector3(0, 1.36, -1.45));
+
+/**
+ * Slide the model so its head bone rests at HEAD_REST_POINT.
+ *
+ * Only the model's position moves — never the pose — so a rig without a
+ * head bone (the schematic fallback, an unusual export) is left exactly
+ * where the fixed placement put it.
+ *
+ * @param {THREE.Object3D} patient The patient group.
+ * @param {THREE.Object3D} model The avatar model inside it.
+ * @return {THREE.Vector3|null} The shift applied, or null when no head bone.
+ * @example
+ * restHeadOnPillow(patient, model);
+ */
+export function restHeadOnPillow(patient, model) {
+  const head = findAvatarBone(model, ["Head", "Bip01 Head"]);
+  if (!head) return null;
+  patient.updateMatrixWorld(true);
+  const head_world = head.getWorldPosition(new THREE.Vector3());
+  const shift = HEAD_REST_POINT.clone().sub(head_world);
+  model.position.add(shift);
+  patient.updateMatrixWorld(true);
+  return shift;
+}
+
+/**
+ * Which axis a standing avatar is tall along, from its untransformed
+ * geometry: "y" (glTF convention) or "z" (Z-up exports such as RocketBox).
+ * Read from the mesh extents rather than assumed per file, so a new avatar
+ * catalogue entry cannot land on the bed sideways.
+ * @param {THREE.Object3D} model Avatar root, before any supine transform.
+ * @return {"y"|"z"} The long axis.
+ * @example
+ * avatarUpAxis(gltf.scene); // "y"
+ */
+export function avatarUpAxis(model) {
+  if (!(model instanceof THREE.Object3D)) {
+    throw new Error("model must be a THREE.Object3D.");
+  }
+  model.updateMatrixWorld(true);
+  const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
+  return size.z > size.y ? "z" : "y";
 }
 
 /**
@@ -1561,6 +1625,12 @@ export function initClinicalScene(container, on_select = () => {}, options = {})
       renderer.domElement.removeEventListener("pointermove", handle_hover);
       controls.dispose();
       disposeObject(scene);
+      // dispose() frees the GPU resources but keeps the GL context alive;
+      // a host that mounts and unmounts the room repeatedly (a plugin room
+      // entered and left) would otherwise pile up contexts until the
+      // browser force-loses the oldest one — the "Context Lost" in the
+      // console after ~16 visits.
+      renderer.forceContextLoss();
       renderer.dispose();
       renderer.domElement.remove();
     },

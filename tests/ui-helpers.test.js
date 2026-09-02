@@ -14,6 +14,9 @@ import {
   getStatusCopy,
   sampleTrendRows,
   vitalSeverity,
+  DEFAULT_LABELS,
+  resolveLabels,
+  buildFindingCardMarkup,
 } from "../src/ui-helpers.js";
 
 test("formatElapsed renders MM:SS and validates input", () => {
@@ -316,4 +319,37 @@ test("buildViewWheelMarkup keeps the wheel within eight wedges", () => {
   assert.throws(() => buildViewWheelMarkup(views, actions), /8 wedges or fewer/);
   assert.throws(() => buildViewWheelMarkup(views, [{ id: "x", label: "", hint: "h", color: "#fff" }]),
     /id, label, hint, and color/);
+});
+
+test("resolveLabels merges a host's translations over the English defaults and rejects typos", () => {
+  const labels = resolveLabels({ case_time: "Fallzeit", move: "Bewegen" });
+  assert.equal(labels.case_time, "Fallzeit");
+  assert.equal(labels.move, "Bewegen");
+  assert.equal(labels.live_monitor, DEFAULT_LABELS.live_monitor);
+  assert.ok(Object.isFrozen(labels));
+  assert.deepEqual(resolveLabels(), DEFAULT_LABELS);
+  assert.throws(() => resolveLabels({ case_tme: "x" }), /Unknown label: case_tme/);
+  assert.throws(() => resolveLabels({ case_time: "" }), /non-empty string/);
+  assert.throws(() => resolveLabels([]), /must be an object/);
+});
+
+test("the wheels, the status copy and the finding card render in the host's labels", () => {
+  const labels = resolveLabels({
+    move: "Bewegen", nudge_head: "Zum Kopfende", view_hub: "Ansicht", choose_view: "Ansicht wählen",
+    copy_critical: "Sofortige Unterstützung", finding_close: "Befund schließen",
+  });
+  const nudge = buildNudgeWheelMarkup(labels);
+  assert.match(nudge, /BEWEGEN/);
+  assert.match(nudge, /aria-label="Zum Kopfende"/);
+  const views = [
+    { id: "a", label: "A", hint: "a", color: "#111" },
+    { id: "b", label: "B", hint: "b", color: "#222" },
+    { id: "c", label: "C", hint: "c", color: "#333" },
+  ];
+  const wheel = buildViewWheelMarkup(views, [], "a", labels);
+  assert.match(wheel, /ANSICHT</);
+  assert.match(wheel, /Ansicht wählen/);
+  assert.equal(getStatusCopy("critical", labels), "Sofortige Unterstützung");
+  const card = buildFindingCardMarkup({ region_label: "Chest", exam_label: "Palpation", finding: "Tender.", audio: [] }, labels);
+  assert.match(card, /aria-label="Befund schließen"/);
 });

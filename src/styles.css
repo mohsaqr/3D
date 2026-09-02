@@ -2,8 +2,13 @@
    room can be embedded in a host application without restyling it. The
    .rohy3d-page rules apply only to the standalone page, which sets that class
    on <html>. */
-.rohy3d-root {
+/* :where() keeps this at zero specificity, so a host that positions the
+   root itself (an absolutely placed slot with a reserved bottom band) wins
+   over the package's default. */
+:where(.rohy3d-root) {
   position: relative;
+}
+.rohy3d-root {
   width: 100%;
   height: 100%;
   overflow: hidden;
