@@ -225,16 +225,16 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
     .map(([category, actions]) => {
       const buttons = actions
         .map((action) => `
-          <button class="action-card${action.unsafe ? " action-card--unsafe" : ""}" data-action="${action.id}" type="button">
+          <button class="action-card${action.unsafe ? " action-card--unsafe" : ""}" data-action="${escapeHtml(action.id)}" type="button">
             <span class="action-card__icon">${uiIcon(action.icon)}</span>
             <span class="action-card__copy">
-              <strong>${action.short_label}</strong>
-              <small>${action.label}</small>
+              <strong>${escapeHtml(action.short_label)}</strong>
+              <small>${escapeHtml(action.label)}</small>
             </span>
             <span class="action-card__state" aria-hidden="true">${uiIcon("arrow")}</span>
           </button>`)
         .join("");
-      return `<div class="action-list" data-action-list="${category}" ${category === "assess" ? "" : "hidden"}>${buttons}</div>`;
+      return `<div class="action-list" data-action-list="${escapeHtml(category)}" ${category === "assess" ? "" : "hidden"}>${buttons}</div>`;
     })
     .join("");
 
@@ -258,8 +258,8 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
             <span>rohy<sup>lab</sup></span>
           </span>`}
           <div class="case-heading">
-            <span class="eyebrow">${patient.location}</span>
-            <h1>${patient.case_title}</h1>
+            <span class="eyebrow">${escapeHtml(patient.location)}</span>
+            <h1>${escapeHtml(patient.case_title)}</h1>
           </div>
           ${buildNudgeWheelMarkup(labels)}
           <div class="topbar__status">
@@ -281,13 +281,13 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         ${bound ? "" : `<aside class="patient-panel glass-panel">
           <div class="panel-kicker"><span>PATIENT</span><b id="patient-state-dot">● HIGH ACUITY</b></div>
           <div class="patient-identity">
-            <div class="patient-avatar-mini">${patient.initials}</div>
-            <div><h2>${patient.name}</h2><p>${patient.age} years · ${patient.pronouns}</p></div>
+            <div class="patient-avatar-mini">${escapeHtml(patient.initials)}</div>
+            <div><h2>${escapeHtml(patient.name)}</h2><p>${escapeHtml(patient.age)} years · ${escapeHtml(patient.pronouns)}</p></div>
           </div>
           <dl class="patient-meta">
-            <div><dt>Presenting concern</dt><dd>${patient.presenting_concern}</dd></div>
-            <div><dt>Background</dt><dd>${patient.background}</dd></div>
-            <div><dt>Allergies</dt><dd>${patient.allergies}</dd></div>
+            <div><dt>Presenting concern</dt><dd>${escapeHtml(patient.presenting_concern)}</dd></div>
+            <div><dt>Background</dt><dd>${escapeHtml(patient.background)}</dd></div>
+            <div><dt>Allergies</dt><dd>${escapeHtml(patient.allergies)}</dd></div>
           </dl>
           <div class="objective-heading"><span>Priority objectives</span><strong id="objective-count">0 / 4</strong></div>
           <div class="objective-list" id="objective-list"></div>
@@ -297,7 +297,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <aside class="monitor-panel glass-panel" aria-label="${escapeHtml(labels.live_vitals)}">
           <div class="monitor-header">
             <div><span class="live-dot"></span><strong>${escapeHtml(labels.live_monitor.toUpperCase())}</strong></div>
-            <span>${patient.bed_label}</span>
+            <span>${escapeHtml(patient.bed_label)}</span>
           </div>
           <div class="ecg-block">
             <div class="ecg-label"><span>${escapeHtml(labels.ecg_lead.toUpperCase())}</span><b id="rhythm-label">${escapeHtml(labels.rhythm_sinus_tach)}</b></div>
@@ -326,7 +326,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
           </div>
         </aside>
 
-        ${bound ? "" : `<div class="scene-label scene-label--patient"><i></i><span>${patient.speaker} · PATIENT</span></div>
+        ${bound ? "" : `<div class="scene-label scene-label--patient"><i></i><span>${escapeHtml(patient.speaker)} · PATIENT</span></div>
         <div class="scene-label scene-label--monitor"><i></i><span>MONITOR</span></div>`}
         <div class="selection-toast" id="selection-toast" hidden></div>
         <div class="region-hover-label" id="region-hover-label" hidden></div>
@@ -343,14 +343,14 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         ${features.finding_card ? `<aside class="finding-card glass-panel" id="finding-card" hidden aria-label="Examination finding"></aside>` : ""}` : ""}
 
         <div class="patient-caption" id="patient-caption"${bound ? " hidden" : ""}>
-          <span class="caption-speaker">${patient.speaker}</span>
-          <p>“${patient.opening_line}”</p>
+          <span class="caption-speaker">${escapeHtml(patient.speaker)}</span>
+          <p>“${escapeHtml(patient.opening_line)}”</p>
         </div>
 
         ${bound ? "" : `<section class="activity-panel glass-panel" aria-label="Clinical timeline">
           <div class="activity-heading"><span>CLINICAL TIMELINE</span><button id="timeline-button" type="button">Expand</button></div>
           <div id="timeline-list" class="timeline-list">
-            <article><time>00:00</time><i></i><p>${patient.arrival_note}</p></article>
+            <article><time>00:00</time><i></i><p>${escapeHtml(patient.arrival_note)}</p></article>
           </div>
         </section>`}
 
@@ -377,12 +377,12 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
           <div class="brief-card__visual">
             <span class="brief-tag">INTERACTIVE 3D CASE</span>
             <div class="brief-orbit" aria-hidden="true"><i></i><i></i><i></i><span>${uiIcon("lungs")}</span></div>
-            <div class="brief-patient"><strong>${patient.initials}</strong><span>${patient.age}</span></div>
+            <div class="brief-patient"><strong>${escapeHtml(patient.initials)}</strong><span>${escapeHtml(patient.age)}</span></div>
           </div>
           <div class="brief-card__content">
             <span class="eyebrow">Rohy clinical simulation · Case 01</span>
-            <h2 id="brief-title">${patient.case_title}</h2>
-            <p>${patient.name}, ${patient.age}, has become acutely short of breath. Enter the room, assess his condition, and respond to changing physiology.</p>
+            <h2 id="brief-title">${escapeHtml(patient.case_title)}</h2>
+            <p>${escapeHtml(patient.name)}, ${escapeHtml(patient.age)}, has become acutely short of breath. Enter the room, assess his condition, and respond to changing physiology.</p>
             <div class="brief-goals">
               <div><span>01</span><p><strong>Assess</strong>Identify the immediate threat.</p></div>
               <div><span>02</span><p><strong>Stabilize</strong>Choose time-critical actions.</p></div>
@@ -398,7 +398,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <article class="result-card">
           <div class="result-icon">${uiIcon("check")}</div>
           <span class="eyebrow">Scenario checkpoint reached</span>
-          <h2 id="result-title">${patient.name.split(" ")[0]} is stabilizing.</h2>
+          <h2 id="result-title">${escapeHtml(String(patient.name ?? "").split(" ")[0])} is stabilizing.</h2>
           <p>You assessed the immediate problem, supported oxygenation, began targeted treatment, and escalated care.</p>
           <div class="result-stats"><div><span>Score</span><strong id="result-score">000</strong></div><div><span>Time</span><strong id="result-time">00:00</strong></div><div><span>Actions</span><strong id="result-actions">0</strong></div></div>
           <button class="begin-button" id="continue-button" type="button">Continue in room ${uiIcon("arrow")}</button>
@@ -410,7 +410,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <article class="trends-card">
           <div class="trends-card__header">
             <div>
-              <span class="eyebrow">${patient.bed_label} · Case trends</span>
+              <span class="eyebrow">${escapeHtml(patient.bed_label)} · Case trends</span>
               <h2 id="trends-title">${escapeHtml(labels.trends_title)}</h2>
             </div>
             <button class="icon-button" id="trends-close" type="button" aria-label="${escapeHtml(labels.trends_close)}">✕</button>
@@ -425,7 +425,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <article class="trends-card records-card">
           <div class="trends-card__header">
             <div>
-              <span class="eyebrow">${patient.name} · Clinical record</span>
+              <span class="eyebrow">${escapeHtml(patient.name)} · Clinical record</span>
               <h2 id="records-title">Medical records</h2>
             </div>
             <button class="icon-button" id="records-close" type="button" aria-label="Close records">✕</button>
@@ -439,7 +439,7 @@ export function buildAppMarkup(grouped_actions, patient = DEFAULT_PATIENT, mode 
         <article class="trends-card records-card">
           <div class="trends-card__header">
             <div>
-              <span class="eyebrow">${patient.bed_label} · Orders</span>
+              <span class="eyebrow">${escapeHtml(patient.bed_label)} · Orders</span>
               <h2 id="treatments-title">Treatment</h2>
             </div>
             <button class="icon-button" id="treatments-close" type="button" aria-label="Close treatments">✕</button>
@@ -1173,7 +1173,7 @@ export function mountPatientRoom(container, options = {}) {
       .map((objective, index) => `
         <div class="objective${objective.complete ? " is-complete" : ""}">
           <span>${objective.complete ? uiIcon("check") : String(index + 1).padStart(2, "0")}</span>
-          <p>${objective.label}</p>
+          <p>${escapeHtml(objective.label)}</p>
         </div>`)
       .join("");
     elements.objective_count.textContent = `${objectives.filter((objective) => objective.complete).length} / ${objectives.length}`;
@@ -1186,8 +1186,8 @@ export function mountPatientRoom(container, options = {}) {
       .slice()
       .reverse()
       .map((event) => `
-        <article class="timeline-event timeline-event--${event.type}">
-          <time>${formatElapsed(event.time)}</time><i></i><p>${event.message}</p>
+        <article class="timeline-event timeline-event--${escapeHtml(event.type)}">
+          <time>${formatElapsed(event.time)}</time><i></i><p>${escapeHtml(event.message)}</p>
         </article>`)
       .join("");
     elements.timeline_button.textContent = timeline_expanded ? "Collapse" : "Expand";

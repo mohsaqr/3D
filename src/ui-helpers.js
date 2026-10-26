@@ -192,11 +192,11 @@ export function buildRecordsMarkup(sections) {
       }
       const rows = section.entries
         .filter((entry) => entry && entry.value !== undefined && entry.value !== null && String(entry.value).length > 0)
-        .map((entry) => `<div><dt>${entry.label}</dt><dd>${entry.value}</dd></div>`)
+        .map((entry) => `<div><dt>${escapeHtml(entry.label)}</dt><dd>${escapeHtml(entry.value)}</dd></div>`)
         .join("");
       return `
         <section class="records-section">
-          <h3>${section.title}</h3>
+          <h3>${escapeHtml(section.title)}</h3>
           <dl class="records-list">${rows || '<div><dt></dt><dd class="records-empty">Not recorded</dd></div>'}</dl>
         </section>`;
     })
@@ -218,14 +218,14 @@ export function buildTreatmentsMarkup(active, available) {
   const active_rows = active
     .map((order) => `
       <div class="treatment-row treatment-row--${order.status === "administered" ? "administered" : "ordered"}">
-        <div><strong>${order.name}</strong><small>${order.detail ?? ""}</small></div>
-        <span class="treatment-status">${order.status ?? "ordered"}</span>
+        <div><strong>${escapeHtml(order.name)}</strong><small>${escapeHtml(order.detail ?? "")}</small></div>
+        <span class="treatment-status">${escapeHtml(order.status ?? "ordered")}</span>
       </div>`)
     .join("");
   const available_rows = available
     .map((treatment, index) => `
       <div class="treatment-row">
-        <div><strong>${treatment.name}</strong><small>${treatment.detail ?? ""}</small></div>
+        <div><strong>${escapeHtml(treatment.name)}</strong><small>${escapeHtml(treatment.detail ?? "")}</small></div>
         <button type="button" class="treatment-order" data-order-index="${index}">Order</button>
       </div>`)
     .join("");
@@ -375,7 +375,7 @@ export function buildViewWheelMarkup(views, actions = [], active_view_id = views
     <button type="button" class="view-wheel__hub" id="view-wheel-hub" aria-expanded="false"
       aria-label="${escapeHtml(labels.open_view_menu)}">
       <small>${escapeHtml(labels.view_hub.toUpperCase())}</small>
-      <strong id="view-wheel-label">${active_view.label}</strong>
+      <strong id="view-wheel-label">${escapeHtml(active_view.label)}</strong>
       <span class="view-wheel__hub-next" id="view-wheel-next">${escapeHtml(labels.choose_view)}</span>
     </button>`;
 }
@@ -666,7 +666,7 @@ export function buildExamWheelMarkup(region_label, items, options = {}) {
           ${item.icon ? `<i class="exam-wheel__glyph" aria-hidden="true">${item.icon}</i>` : ""}
           <strong>${escapeHtml(item.label)}</strong>
           ${show_hints && item.hint ? `<small>${escapeHtml(item.hint)}</small>` : ""}
-          ${item.badge ? `<b class="exam-wheel__badge">${item.badge}</b>` : ""}
+          ${item.badge ? `<b class="exam-wheel__badge">${escapeHtml(item.badge)}</b>` : ""}
         </span>
         ${item.done ? `<span class="exam-wheel__done exam-wheel__done--${item.done}" style="left: ${geometry[index].tick_left}; top: ${geometry[index].tick_top};" aria-hidden="true">✓</span><span class="sr-only">, performed${item.done === "abnormal" ? ", abnormal finding" : ""}</span>` : ""}
       </button>`;
